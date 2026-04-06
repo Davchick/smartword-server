@@ -1,0 +1,39 @@
+{
+  "root": true,
+  "env": {
+    "node": true,
+    "es2021": true
+  },
+  "extends": ["eslint:recommended"],
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "rules": {
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "CallExpression[callee.property.name='$queryRaw']",
+        "message": "Direct SQL queries ($queryRaw) are not allowed. Use Prisma client methods to prevent SQL injection."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='$executeRaw']",
+        "message": "Direct SQL execution ($executeRaw) is not allowed. Use Prisma client methods to prevent SQL injection."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='$queryRawUnsafe']",
+        "message": "Unsafe SQL queries are strictly forbidden. Use parameterized queries."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='$executeRawUnsafe']",
+        "message": "Unsafe SQL execution is strictly forbidden. Use parameterized queries."
+      }
+    ],
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "security/detect-object-injection": "off"
+  },
+  "plugins": ["security"],
+  "ignorePatterns": ["node_modules/", "dist/", "build/"]
+}

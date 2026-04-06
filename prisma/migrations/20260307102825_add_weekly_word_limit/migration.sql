@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "weekStartDate" DATE NOT NULL DEFAULT '2026-03-02 00:00:00 +00:00',
+ADD COLUMN     "wordsLearnedThisWeek" INTEGER NOT NULL DEFAULT 0;

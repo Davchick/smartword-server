@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String         @id @default(uuid())
+  email          String         @unique
+  passwordHash   String
+  emailVerified  Boolean        @default(false)
+  emailVerifyToken         String?   @unique
+  emailVerifyTokenExpiresAt DateTime?
+  googleId       String?        @unique
+  googleEmail    String?
+  googlePicture  String?
+  isPremium      Boolean        @default(false)
+  aiMessagesUsed Int            @default(0)
+  createdAt      DateTime       @default(now())
+
+  // Лимит выученных слов в неделю (50 для бесплатных, безлимит для Premium)
+  wordsLearnedThisWeek Int      @default(0)
+  weekStartDate        DateTime @db.Date @default("2026-03-02T00:00:00Z")
+
+  // Подписка через ЮKassa (разовые платежи с продлением срока)
+  subscriptionType      String?
+  subscriptionExpiresAt DateTime?
+
+  groups              WordGroup[]
+  words               Word[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  trainingProgress    TrainingProgress[]
+  userAchievements    UserAchievement[]
+  userStreak          UserStreak?
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model WordGroup {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  language   String
+  createdAt  DateTime @default(now())
+
+  words      Word[]
+}
+
+model Word {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groupId      String?
+  group        WordGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  original     String
+  translation  String
+  correctCount Float     @default(0)
+  lastReviewed DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+model RefreshToken {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token           String    @unique
+  deviceFingerprint String? @db.VarChar(64)
+  createdAt       DateTime  @default(now())
+  revokedAt       DateTime?
+  lastUsedAt      DateTime?
+  
+  @@index([userId, deviceFingerprint])
+}
+
+model TrainingProgress {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  points    Int      @default(0)
+  date      DateTime @db.Date
+  createdAt DateTime @default(now())
+
+  @@unique([userId, date])
+}
+
+// Достижения пользователей
+model Achievement {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  title       String
+  description String
+  icon        String
+  category    String   // streak, words, swipe, chat
+  threshold   Int      // Значение для получения (дни, количество слов и т.д.)
+  points      Int      @default(0) // Очки за достижение
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  
+  userAchievements UserAchievement[]
+
+  @@index([category])
+}
+
+model UserAchievement {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId  String
+  achievement    Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  progress       Int       @default(0) // Текущий прогресс
+  unlocked       Boolean   @default(false)
+  unlockedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([userId, achievementId])
+  @@index([userId, unlocked])
+}
+
+// Streak - ежедневные тренировки
+model UserStreak {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentStreak   Int       @default(0) // Текущая серия (дни подряд)
+  longestStreak   Int       @default(0) // Лучшая серия
+  lastActivity    DateTime  @db.Date // Последняя активность
+  totalActivity   Int       @default(0) // Всего дней активности
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([currentStreak])
+}
+
+// Журнал учёта согласий на обработку ПДн (требование 152-ФЗ, ст. 9)
+model ConsentLog {
+  id              String    @id @default(uuid())
+  userId          String?   // Может быть null для гостей
+  email           String?   // Email пользователя (для регистрации)
+  ipAddress       String    // IP-адрес для фиксации
+  userAgent       String    // User-Agent для идентификации устройства
+  policyVersion   String    // Версия политики, с которой согласились
+  consentType     String    // Тип согласия: registration, ai_chat, marketing
+  granted         Boolean   @default(true) //true = согласие, false = отзыв
+  createdAt       DateTime  @default(now())
+  withdrawnAt     DateTime? // Дата отзыва согласия (если был отзыв)
+  
+  @@index([userId])
+  @@index([email])
+  @@index([createdAt])
+}
+
