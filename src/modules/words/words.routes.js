@@ -6,17 +6,12 @@ const streaksService = require('../streaks/streaks.service');
 
 const router = express.Router();
 
-// Логирование всех запросов для отладки
-router.use((req, res, next) => {
-  console.log('[words.routes] Request:', req.method, req.path, 'URL:', req.url);
-  next();
-});
-
 router.use(authMiddleware);
 
 /**
  * GET /words?groupId=...
  * List words for current user, optional filter by groupId. Order by createdAt desc.
+ * Возвращает { words: [...], totalCount: number } — totalCount это общее число слов пользователя.
  */
 router.get('/', async (req, res) => {
   try {
@@ -24,12 +19,17 @@ router.get('/', async (req, res) => {
     const where = { userId: req.user.id };
     if (groupId && typeof groupId === 'string') where.groupId = groupId;
 
-    const words = await prisma.word.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-    });
-    res.json(
-      words.map((w) => ({
+    // Параллельно: слова + totalCount всех слов пользователя
+    const [words, totalCountResult] = await Promise.all([
+      prisma.word.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.word.count({ where: { userId: req.user.id } }),
+    ]);
+
+    res.json({
+      words: words.map((w) => ({
         id: w.id,
         group_id: w.groupId,
         user_id: w.userId,
@@ -38,8 +38,9 @@ router.get('/', async (req, res) => {
         correct_count: w.correctCount,
         last_reviewed: w.lastReviewed ? w.lastReviewed.toISOString() : null,
         created_at: w.createdAt.toISOString(),
-      }))
-    );
+      })),
+      totalCount: totalCountResult,
+    });
   } catch (err) {
     console.error('[words GET]', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -148,7 +149,8 @@ router.delete('/:id', async (req, res) => {
 /**
  * POST /words/:id/progress
  * Body: { knew: boolean, correctDelta?: number, incorrectDelta?: number }
- * 
+ *
+ * Оптимизировано: все операции в одной транзакции вместо 7+ отдельных запросов.
  * Когда слово набирает 5 очков (correctCount >= 5) — оно считается выученным.
  * Для бесплатных пользователей: лимит 50 выученных слов в неделю.
  */
@@ -156,146 +158,97 @@ router.post('/:id/progress', async (req, res) => {
   try {
     const { id } = req.params;
     const { knew, correctDelta = 1, incorrectDelta = -1 } = req.body;
-    
-    console.log('[words/progress] Request:', { id, knew, correctDelta, incorrectDelta });
-    
-    const existing = await prisma.word.findFirst({
-      where: { id, userId: req.user.id },
-    });
-    if (!existing) {
-      return res.status(404).json({ error: 'Word not found' });
-    }
-
-    console.log('[words/progress] Existing word:', { 
-      id: existing.id, 
-      correctCount: existing.correctCount,
-      wasLearned: existing.correctCount >= 5 
-    });
-
-    // Получаем данные пользователя для проверки лимита
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: {
-        id: true,
-        isPremium: true,
-        wordsLearnedThisWeek: true,
-        weekStartDate: true,
-      },
-    });
-
-    if (!user) {
-      console.error('[words/progress] User not found:', req.user.id);
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    console.log('[words/progress] User:', { 
-      isPremium: user?.isPremium, 
-      wordsLearnedThisWeek: user?.wordsLearnedThisWeek,
-      weekStartDate: user?.weekStartDate 
-    });
-
-    // Проверяем и сбрасываем неделю если нужно
-    const now = new Date();
-    const currentMonday = getMonday(now);
-    let weekStartDate = user.weekStartDate;
-    let wordsLearnedThisWeek = user.wordsLearnedThisWeek;
-
-    // Если неделя прошла — сбрасываем счётчик
-    if (!weekStartDate || weekStartDate < currentMonday) {
-      wordsLearnedThisWeek = 0;
-      weekStartDate = currentMonday;
-      try {
-        await prisma.user.update({
-          where: { id: req.user.id },
-          data: { wordsLearnedThisWeek: 0, weekStartDate: currentMonday },
-        });
-        console.log('[words/progress] Week reset, new weekStartDate:', currentMonday);
-      } catch (err) {
-        console.error('[words/progress] Week reset error:', err);
-      }
-    }
 
     const delta = knew ? Number(correctDelta) : Number(incorrectDelta);
-    const newCount = Math.max(0, existing.correctCount + delta);
-    
-    // Проверяем: слово было < 5, стало >= 5 → значит выучено на этой неделе
-    const wasLearnedBefore = existing.correctCount >= 5;
-    const isNowLearned = newCount >= 5;
-    const justLearned = !wasLearnedBefore && isNowLearned;
+    const now = new Date();
+    const currentMonday = getMonday(now);
 
-    // Если только что выучили и пользователь не премиум — проверяем лимит
-    // МЯГКИЙ ЛИМИТ: не блокируем, просто не засчитываем слова после лимита
-    if (justLearned && !user.isPremium) {
-      if (wordsLearnedThisWeek >= 50) {
-        console.log('[words/progress] Soft limit reached - word learned but not counted:', wordsLearnedThisWeek);
-        // Не блокируем, просто не увеличиваем счётчик
-        // Слово всё равно уйдёт в архив (correctCount >= 5), но не засчитается в лимит
-      } else {
-        // Увеличиваем счётчик выученных слов
+    // Вся операция в одной транзакции — атомарность и производительность
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Проверяем существование слова
+      const existing = await tx.word.findFirst({
+        where: { id, userId: req.user.id },
+      });
+      if (!existing) {
+        throw Object.assign(new Error('Word not found'), { status: 404 });
+      }
+
+      // 2. Получаем данные пользователя
+      const user = await tx.user.findUnique({
+        where: { id: req.user.id },
+        select: {
+          isPremium: true,
+          wordsLearnedThisWeek: true,
+          weekStartDate: true,
+        },
+      });
+      if (!user) {
+        throw Object.assign(new Error('User not found'), { status: 404 });
+      }
+
+      const wasLearnedBefore = existing.correctCount >= 5;
+      const newCount = Math.max(0, existing.correctCount + delta);
+      const isNowLearned = newCount >= 5;
+      const justLearned = !wasLearnedBefore && isNowLearned;
+
+      // 3. Сброс недели если нужно
+      let wordsLearnedThisWeek = user.wordsLearnedThisWeek;
+      let weekStartDate = user.weekStartDate;
+
+      if (!weekStartDate || weekStartDate < currentMonday) {
+        wordsLearnedThisWeek = 0;
+        weekStartDate = currentMonday;
+      }
+
+      // 4. Обновляем weekly counter если слово только что выучено
+      if (justLearned && !user.isPremium && wordsLearnedThisWeek < 50) {
         wordsLearnedThisWeek++;
-        try {
-          await prisma.user.update({
-            where: { id: req.user.id },
-            data: { wordsLearnedThisWeek },
-          });
-          console.log('[words/progress] Incremented wordsLearnedThisWeek:', wordsLearnedThisWeek);
-        } catch (err) {
-          console.error('[words/progress] Failed to update wordsLearnedThisWeek:', err);
-        }
       }
-    }
 
-    const updated = await prisma.word.update({
-      where: { id },
-      data: {
-        correctCount: newCount,
-        lastReviewed: new Date(),
-      },
+      // 5. Обновляем слово и пользователя в одном батче
+      const [, updatedUser] = await Promise.all([
+        tx.word.update({
+          where: { id },
+          data: {
+            correctCount: newCount,
+            lastReviewed: now,
+          },
+        }),
+        tx.user.update({
+          where: { id: req.user.id },
+          data: {
+            wordsLearnedThisWeek,
+            weekStartDate,
+          },
+        }),
+      ]);
+
+      return {
+        newCount,
+        justLearned,
+        wordsLearnedThisWeek,
+        isPremium: user.isPremium,
+      };
     });
 
-    console.log('[words/progress] Updated:', {
-      id: updated.id,
-      correct_count: updated.correctCount,
-      justLearned,
-      newWeeklyCount: wordsLearnedThisWeek
-    });
-
-    // Обновляем достижения
-    if (justLearned) {
-      try {
-        const unlockedAchievements = await achievementsService.checkAndUpdate(req.user.id, 'word_learned', 1);
-        if (unlockedAchievements.length > 0) {
-          console.log('[words/progress] Achievements unlocked:', unlockedAchievements.map(a => a.title));
-        }
-      } catch (err) {
-        console.error('[words/progress] Achievement check error:', err);
-      }
+    // Достижения и streak — вне транзакции (не критично если упадут)
+    if (result.justLearned) {
+      achievementsService.checkAndUpdate(req.user.id, 'word_learned', 1).catch(() => {});
     }
-
-    // Обновляем streak (check-in при активности)
-    try {
-      await streaksService.checkIn(req.user.id);
-    } catch (err) {
-      console.error('[words/progress] Streak check-in error:', err);
-    }
-
-    console.log('[words/progress] Updated:', {
-      id: updated.id,
-      correct_count: updated.correctCount,
-      just_learned: justLearned,
-      words_learned_this_week: wordsLearnedThisWeek,
-      limit_reached: wordsLearnedThisWeek >= 50 && !user.isPremium,
-    });
+    streaksService.checkIn(req.user.id).catch(() => {});
 
     res.json({
-      id: updated.id,
-      correct_count: updated.correctCount,
-      last_reviewed: updated.lastReviewed.toISOString(),
-      just_learned: justLearned,
-      words_learned_this_week: wordsLearnedThisWeek,
-      limit_reached: wordsLearnedThisWeek >= 50 && !user.isPremium,
+      id,
+      correct_count: result.newCount,
+      last_reviewed: now.toISOString(),
+      just_learned: result.justLearned,
+      words_learned_this_week: result.wordsLearnedThisWeek,
+      limit_reached: result.wordsLearnedThisWeek >= 50 && !result.isPremium,
     });
   } catch (err) {
+    if (err.status === 404) {
+      return res.status(404).json({ error: err.message });
+    }
     console.error('[words POST progress] Error:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message });
   }

@@ -4,12 +4,6 @@ const { authMiddleware } = require('../../middleware/auth');
 
 const router = express.Router();
 
-// Логирование всех запросов для отладки
-router.use((req, res, next) => {
-  console.log('[stats.routes] Request:', req.method, req.path, 'URL:', req.url);
-  next();
-});
-
 const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const LEARNED_THRESHOLD = 5;
 
@@ -24,21 +18,37 @@ function getDayLabel(date) {
 /**
  * GET /stats
  * Returns totalWords, learnedWords (correct_count >= 5), currentStreak, weekActivity.
+ * Оптимизировано: используем count и агрегации вместо загрузки всех слов в память.
  */
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const words = await prisma.word.findMany({
-      where: { userId: req.user.id },
-      select: { correctCount: true, lastReviewed: true },
+    const userId = req.user.id;
+
+    // Считаем слова агрегациями — без загрузки в память
+    const [totalWords, learnedWords] = await prisma.$transaction([
+      prisma.word.count({ where: { userId } }),
+      prisma.word.count({ where: { userId, correctCount: { gte: LEARNED_THRESHOLD } } }),
+    ]);
+
+    // Получаем только уникальные даты активности — без загрузки всех слов
+    // Prisma groupBy по lastReviewed вернёт уникальные даты
+    const activityDates = await prisma.word.groupBy({
+      by: ['lastReviewed'],
+      where: {
+        userId,
+        lastReviewed: {
+          gte: new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000), // последние 365 дней
+          not: null,
+        },
+      },
     });
 
-    const allWords = words.map((w) => ({
-      correct_count: w.correctCount,
-      last_reviewed: w.lastReviewed ? w.lastReviewed.toISOString() : null,
-    }));
-
-    const totalWords = allWords.length;
-    const learnedWords = allWords.filter((w) => w.correct_count >= LEARNED_THRESHOLD).length;
+    const activeDays = new Set();
+    for (const record of activityDates) {
+      if (record.lastReviewed) {
+        activeDays.add(toDateStr(new Date(record.lastReviewed)));
+      }
+    }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -46,15 +56,6 @@ router.get('/', authMiddleware, async (req, res) => {
     const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
     const monday = new Date(today);
     monday.setDate(today.getDate() + mondayOffset);
-
-    const activeDays = new Set();
-    for (const w of allWords) {
-      if (w.last_reviewed) {
-        const d = new Date(w.last_reviewed);
-        d.setHours(0, 0, 0, 0);
-        activeDays.add(toDateStr(d));
-      }
-    }
 
     const weekActivity = [];
     for (let i = 0; i < 7; i++) {
@@ -150,7 +151,7 @@ router.get('/training-progress', authMiddleware, async (req, res) => {
 router.post('/training-progress', authMiddleware, async (req, res) => {
   try {
     const { points } = req.body;
-    
+
     if (typeof points !== 'number' || points < 0) {
       return res.status(400).json({ error: 'Invalid points value' });
     }

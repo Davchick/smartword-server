@@ -44,6 +44,8 @@ model PasswordResetToken {
   token     String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model WordGroup {
@@ -55,6 +57,8 @@ model WordGroup {
   createdAt  DateTime @default(now())
 
   words      Word[]
+
+  @@index([userId])
 }
 
 model Word {
@@ -68,6 +72,9 @@ model Word {
   correctCount Float     @default(0)
   lastReviewed DateTime?
   createdAt    DateTime  @default(now())
+
+  @@index([userId])
+  @@index([groupId])
 }
 
 model RefreshToken {

@@ -58,7 +58,7 @@ router.get('/', authMiddleware, async (req, res) => {
         ? user.subscriptionExpiresAt.toISOString()
         : null,
       words_learned_this_week: wordsLearnedThisWeek,
-      weekly_limit: isPremium ? Infinity : 50,
+      weekly_limit: isPremium ? 999999 : 50,
     });
   } catch (err) {
     console.error('[profile GET]', err);
@@ -129,7 +129,7 @@ router.patch('/', authMiddleware, async (req, res) => {
           ? user.subscriptionExpiresAt.toISOString()
           : null,
         words_learned_this_week: wordsLearnedThisWeek,
-        weekly_limit: isPremium ? Infinity : 50,
+        weekly_limit: isPremium ? 999999 : 50,
       });
     }
 
@@ -157,7 +157,7 @@ router.patch('/', authMiddleware, async (req, res) => {
     // Проверяем актуальность недели
     const currentMonday = getMonday(now);
     let wordsLearnedThisWeek = updated.wordsLearnedThisWeek;
-    
+
     if (!updated.weekStartDate || updated.weekStartDate < currentMonday) {
       wordsLearnedThisWeek = 0;
     }
@@ -173,7 +173,7 @@ router.patch('/', authMiddleware, async (req, res) => {
         ? updated.subscriptionExpiresAt.toISOString()
         : null,
       words_learned_this_week: wordsLearnedThisWeek,
-      weekly_limit: isPremium ? Infinity : 50,
+      weekly_limit: isPremium ? 999999 : 50,
     });
   } catch (err) {
     console.error('[profile PATCH]', err);
@@ -186,6 +186,7 @@ router.patch('/', authMiddleware, async (req, res) => {
  * Импортирует гостевые словари и слова в новый аккаунт.
  * Используется ОДИН РАЗ — только когда у пользователя в базе ещё нет данных.
  * Body: { groups: GuestGroup[], words: GuestWord[] }
+ * Оптимизировано: используем createMany вместо цикла отдельных INSERT.
  */
 router.post('/import-guest', authMiddleware, async (req, res) => {
   try {
@@ -206,51 +207,65 @@ router.post('/import-guest', authMiddleware, async (req, res) => {
     }
 
     const groupIdMap = new Map();
-    let importedGroups = 0;
-    let importedWords = 0;
 
     await prisma.$transaction(async (tx) => {
-      if (Array.isArray(groups)) {
-        for (const g of groups) {
-          if (!g || typeof g.name !== 'string') continue;
-          const created = await tx.wordGroup.create({
-            data: {
-              userId: req.user.id,
-              name: g.name.trim(),
-              language: typeof g.language === 'string' ? g.language.trim() : '',
-              createdAt: g.created_at ? new Date(g.created_at) : new Date(),
-            },
-          });
-          if (g.id) {
-            groupIdMap.set(g.id, created.id);
+      // 1. Создаём группы батчем через createMany
+      const validGroups = (Array.isArray(groups) ? groups : [])
+        .filter(g => g && typeof g.name === 'string')
+        .map(g => ({
+          userId: req.user.id,
+          name: g.name.trim(),
+          language: typeof g.language === 'string' ? g.language.trim() : '',
+          createdAt: g.created_at ? new Date(g.created_at) : new Date(),
+        }));
+
+      if (validGroups.length > 0) {
+        await tx.wordGroup.createMany({
+          data: validGroups,
+        });
+
+        // Запрашиваем созданные группы для маппинга guest_id → db_id
+        const createdGroups = await tx.wordGroup.findMany({
+          where: { userId: req.user.id },
+          select: { id: true, name: true, createdAt: true },
+        });
+
+        // Маппим guest_id → new_id по name+createdAt
+        for (const created of createdGroups) {
+          const guestGroup = groups.find(gg =>
+            gg && typeof gg.name === 'string' &&
+            gg.name.trim() === created.name &&
+            (!gg.created_at || Math.abs(new Date(gg.created_at).getTime() - created.createdAt.getTime()) < 5000)
+          );
+          if (guestGroup?.id) {
+            groupIdMap.set(guestGroup.id, created.id);
           }
-          importedGroups += 1;
         }
       }
 
-      if (Array.isArray(words)) {
-        for (const w of words) {
-          if (!w || typeof w.original !== 'string' || typeof w.translation !== 'string') continue;
-          const mappedGroupId = w.group_id ? groupIdMap.get(w.group_id) : null;
-          await tx.word.create({
-            data: {
-              userId: req.user.id,
-              groupId: mappedGroupId || null,
-              original: w.original.trim(),
-              translation: w.translation.trim(),
-              correctCount: typeof w.correct_count === 'number' ? w.correct_count : 0,
-              lastReviewed: w.last_reviewed ? new Date(w.last_reviewed) : null,
-              createdAt: w.created_at ? new Date(w.created_at) : new Date(),
-            },
-          });
-          importedWords += 1;
-        }
+      // 2. Создаём слова батчем через createMany
+      const validWords = (Array.isArray(words) ? words : [])
+        .filter(w => w && typeof w.original === 'string' && typeof w.translation === 'string')
+        .map(w => ({
+          userId: req.user.id,
+          groupId: w.group_id ? (groupIdMap.get(w.group_id) || null) : null,
+          original: w.original.trim(),
+          translation: w.translation.trim(),
+          correctCount: typeof w.correct_count === 'number' ? w.correct_count : 0,
+          lastReviewed: w.last_reviewed ? new Date(w.last_reviewed) : null,
+          createdAt: w.created_at ? new Date(w.created_at) : new Date(),
+        }));
+
+      if (validWords.length > 0) {
+        await tx.word.createMany({
+          data: validWords,
+        });
       }
     });
 
     return res.status(201).json({
-      imported_groups: importedGroups,
-      imported_words: importedWords,
+      imported_groups: Array.isArray(groups) ? groups.filter(g => g && typeof g.name === 'string').length : 0,
+      imported_words: Array.isArray(words) ? words.filter(w => w && typeof w.original === 'string' && typeof w.translation === 'string').length : 0,
     });
   } catch (err) {
     console.error('[profile/import-guest]', err);
