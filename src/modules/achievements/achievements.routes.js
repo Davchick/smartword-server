@@ -18,6 +18,30 @@ router.get('/', auth, achievementsController.getUserAchievements);
 router.get('/summary', auth, achievementsController.getAchievementsSummary);
 
 /**
+ * @route   GET /api/achievements/all
+ * @desc    Get achievements + summary в одном запросе (оптимизация)
+ * @access  Private
+ */
+router.get('/all', auth, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const achievementsService = require('./achievements.service');
+
+    const [achievements, summary] = await Promise.all([
+      achievementsService.getUserAchievements(userId),
+      achievementsService.getSummary(userId),
+    ]);
+
+    res.json({
+      success: true,
+      data: { achievements, summary },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * @route   POST /api/achievements/check
  * @desc    Check and update achievements progress (triggered by actions)
  * @access  Private

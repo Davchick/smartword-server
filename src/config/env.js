@@ -132,10 +132,11 @@ const env = {
   // Telegram Support Bot
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramAdminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || '',
-  
+
   // Environment info
   isDevelopment: isDev,
   isProduction: isProduction,
+  nodeEnv: process.env.NODE_ENV || 'development',
 };
 
 // Run validation before exporting

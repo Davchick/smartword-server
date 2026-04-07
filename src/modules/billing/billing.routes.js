@@ -80,6 +80,10 @@ router.post('/create-payment', authMiddleware, async (req, res) => {
       },
     };
 
+    // 15-секундный таймаут для YooKassa — не держим соединение при медленном ответе
+    const yooKassaController = new AbortController();
+    const yooKassaTimeout = setTimeout(() => yooKassaController.abort(), 15000);
+
     const response = await fetch(YOOKASSA_API_URL, {
       method: 'POST',
       headers: {
@@ -88,7 +92,10 @@ router.post('/create-payment', authMiddleware, async (req, res) => {
         'Idempotence-Key': idempotenceKey,
       },
       body: JSON.stringify(body),
+      signal: yooKassaController.signal,
     });
+
+    clearTimeout(yooKassaTimeout);
 
     const data = await response.json().catch(() => null);
 

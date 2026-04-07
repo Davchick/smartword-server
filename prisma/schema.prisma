@@ -75,6 +75,8 @@ model Word {
 
   @@index([userId])
   @@index([groupId])
+  @@index([lastReviewed])
+  @@index([correctCount])
 }
 
 model RefreshToken {

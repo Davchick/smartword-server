@@ -14,32 +14,47 @@ function generateDeviceFingerprint(req) {
 }
 
 /**
- * In-memory LRU cache for authenticated users.
- * Reduces DB load: avoids prisma.user.findUnique on every request.
- * TTL: 5 minutes, max size: 10,000 entries.
+ * Простой LRU кэш для аутентифицированных пользователей.
+ * Снижает нагрузку на БД: avoids prisma.user.findUnique on every request.
+ * Реализован через Map с перемещением при доступе — настоящий LRU.
  */
-const userCache = new Map();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const CACHE_MAX_SIZE = 10000;
-
-function getCachedUser(userId) {
-  const entry = userCache.get(userId);
-  if (!entry) return null;
-  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
-    userCache.delete(userId);
-    return null;
+class LRUCache {
+  constructor(maxSize, ttlMs) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+    this.map = new Map();
   }
-  return entry.data;
+
+  get(key) {
+    const entry = this.map.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.map.delete(key);
+      return null;
+    }
+    // Перемещаем в конец — это самый «горячий» элемент
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry.data;
+  }
+
+  set(key, data) {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxSize) {
+      // Удаляем самый старый (первый) элемент — настоящий LRU eviction
+      const oldestKey = this.map.keys().next().value;
+      this.map.delete(oldestKey);
+    }
+    this.map.set(key, { data, timestamp: Date.now() });
+  }
+
+  delete(key) {
+    this.map.delete(key);
+  }
 }
 
-function setCachedUser(userId, data) {
-  if (userCache.size >= CACHE_MAX_SIZE) {
-    // Remove oldest entry (simple LRU approximation)
-    const oldestKey = userCache.keys().next().value;
-    userCache.delete(oldestKey);
-  }
-  userCache.set(userId, { data, timestamp: Date.now() });
-}
+const userCache = new LRUCache(10000, 5 * 60 * 1000); // 10K entries, 5 min TTL
 
 /**
  * Проверяет Authorization: Bearer <access_token>, верифицирует JWT,
@@ -69,7 +84,7 @@ async function authMiddleware(req, res, next) {
     }
 
     // Проверяем кэш перед запросом к БД
-    let user = getCachedUser(userId);
+    let user = userCache.get(userId);
 
     if (!user) {
       user = await prisma.user.findUnique({
@@ -87,7 +102,7 @@ async function authMiddleware(req, res, next) {
         return res.status(401).json({ error: 'Unauthorized', message: 'User not found' });
       }
 
-      setCachedUser(userId, user);
+      userCache.set(userId, user);
     }
 
     // Store device fingerprint for security monitoring

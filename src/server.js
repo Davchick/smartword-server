@@ -20,6 +20,9 @@ app.use(cors());
 
 app.use(express.json({ limit: '10mb' })); // Limit body size
 
+// Cache-Control headers для API
+app.use(require('./middleware/cacheControl').cacheControl);
+
 // Healthcheck (no rate limiting for health checks)
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

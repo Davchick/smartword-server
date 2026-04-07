@@ -104,6 +104,10 @@ async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85) {
     }
 
     try {
+      // 30-секундный таймаут — если OpenRouter не отвечает, не держим соединение
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
       const response = await fetch(OPENROUTER_URL, {
         method: 'POST',
         headers: {
@@ -118,7 +122,10 @@ async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85) {
           max_tokens: maxTokens,
           temperature,
         }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorText = await response.text();

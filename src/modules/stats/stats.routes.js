@@ -1,6 +1,7 @@
 const express = require('express');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
+const { Prisma } = require('@prisma/client');
 
 const router = express.Router();
 
@@ -16,13 +17,63 @@ function getDayLabel(date) {
 }
 
 /**
+ * In-memory кэш для stats.
+ * TTL: 60 сек — снижает нагрузку на БД при частых запросах.
+ */
+const statsCache = new Map();
+const STATS_CACHE_TTL_MS = 60 * 1000;
+const STATS_CACHE_MAX = 5000;
+
+function getCachedStats(userId) {
+  const entry = statsCache.get(userId);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > STATS_CACHE_TTL_MS) {
+    statsCache.delete(userId);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedStats(userId, data) {
+  if (statsCache.size >= STATS_CACHE_MAX) {
+    const oldestKey = statsCache.keys().next().value;
+    statsCache.delete(oldestKey);
+  }
+  statsCache.set(userId, { data, timestamp: Date.now() });
+}
+
+/**
+ * Инвалидирует кэш stats для пользователя.
+ * Вызывается из batch progress endpoint после тренировки.
+ */
+function invalidateCachedStats(userId) {
+  statsCache.delete(userId);
+}
+
+// Экспортируем для использования из других модулей
+module.exports.invalidateCachedStats = invalidateCachedStats;
+
+/**
  * GET /stats
  * Returns totalWords, learnedWords (correct_count >= 5), currentStreak, weekActivity.
- * Оптимизировано: используем count и агрегации вместо загрузки всех слов в память.
+ *
+ * Оптимизировано:
+ * - currentStreak берётся из UserStreak (быстрый unique lookup, не raw SQL сканирование)
+ * - weekActivity: DISTINCT DATE с ограничением 7 дней (не 1 год)
+ * - In-memory кэш с TTL 60 сек
  */
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // Проверяем кэш
+    const cached = getCachedStats(userId);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
     // Считаем слова агрегациями — без загрузки в память
     const [totalWords, learnedWords] = await prisma.$transaction([
@@ -30,28 +81,30 @@ router.get('/', authMiddleware, async (req, res) => {
       prisma.word.count({ where: { userId, correctCount: { gte: LEARNED_THRESHOLD } } }),
     ]);
 
-    // Получаем только уникальные даты активности — без загрузки всех слов
-    // Prisma groupBy по lastReviewed вернёт уникальные даты
-    const activityDates = await prisma.word.groupBy({
-      by: ['lastReviewed'],
-      where: {
-        userId,
-        lastReviewed: {
-          gte: new Date(today.getTime() - 365 * 24 * 60 * 60 * 1000), // последние 365 дней
-          not: null,
-        },
-      },
+    // Текущий streak — из UserStreak таблицы (unique index lookup, очень быстро)
+    const userStreak = await prisma.userStreak.findUnique({
+      where: { userId },
+      select: { currentStreak: true, lastActivity: true },
     });
 
+    const currentStreak = userStreak?.currentStreak ?? 0;
+
+    // WeekActivity: уникальные даты только за последнюю неделю (не за год!)
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const activeDatesResult = await prisma.$queryRaw`
+      SELECT DISTINCT DATE("lastReviewed") as date
+      FROM "Word"
+      WHERE "userId" = ${userId}::uuid
+        AND "lastReviewed" >= ${weekAgo}
+        AND "lastReviewed" IS NOT NULL
+    `;
+
     const activeDays = new Set();
-    for (const record of activityDates) {
-      if (record.lastReviewed) {
-        activeDays.add(toDateStr(new Date(record.lastReviewed)));
-      }
+    for (const row of activeDatesResult) {
+      activeDays.add(toDateStr(row.date));
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
     const dayOfWeek = today.getDay();
     const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
     const monday = new Date(today);
@@ -72,24 +125,17 @@ router.get('/', authMiddleware, async (req, res) => {
       });
     }
 
-    let streak = 0;
-    const cursor = new Date(today);
-    while (true) {
-      const dateStr = toDateStr(cursor);
-      if (activeDays.has(dateStr)) {
-        streak++;
-        cursor.setDate(cursor.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-
-    res.json({
+    const result = {
       totalWords,
       learnedWords,
-      currentStreak: streak,
+      currentStreak,
       weekActivity,
-    });
+    };
+
+    // Кэшируем
+    setCachedStats(userId, result);
+
+    res.json(result);
   } catch (err) {
     console.error('[stats GET]', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -175,6 +221,9 @@ router.post('/training-progress', authMiddleware, async (req, res) => {
         points,
       },
     });
+
+    // Инвалидируем кэш — данные изменились
+    invalidateCachedStats(req.user.id);
 
     res.json({ success: true });
   } catch (err) {

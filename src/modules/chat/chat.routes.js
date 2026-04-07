@@ -11,6 +11,35 @@ const router = express.Router();
 const FREE_MESSAGES_LIMIT = 10;
 
 /**
+ * In-memory кэш для слов пользователя в чате.
+ * TTL: 5 мин — слова меняются редко во время чат-сессии.
+ * Снижает нагрузку на БД: вместо N запросов на N сообщений — 1 запрос за 5 мин.
+ */
+const chatWordsCache = new Map();
+const CHAT_WORDS_CACHE_TTL_MS = 5 * 60 * 1000;
+const CHAT_WORDS_CACHE_MAX = 5000;
+
+function getCachedWords(userId, groupId) {
+  const key = `${userId}:${groupId || 'none'}`;
+  const entry = chatWordsCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CHAT_WORDS_CACHE_TTL_MS) {
+    chatWordsCache.delete(key);
+    return null;
+  }
+  return entry.words;
+}
+
+function setCachedWords(userId, groupId, words) {
+  if (chatWordsCache.size >= CHAT_WORDS_CACHE_MAX) {
+    const oldestKey = chatWordsCache.keys().next().value;
+    chatWordsCache.delete(oldestKey);
+  }
+  const key = `${userId}:${groupId || 'none'}`;
+  chatWordsCache.set(key, { words, timestamp: Date.now() });
+}
+
+/**
  * POST /chat/translate
  * Body: { text }
  * Returns: { result }
@@ -82,14 +111,19 @@ router.post('/', authMiddleware, async (req, res) => {
       });
     }
 
-    const wordsWhere = { userId: req.user.id };
-    if (groupId) wordsWhere.groupId = groupId;
-    const words = await prisma.word.findMany({
-      where: wordsWhere,
-      orderBy: { correctCount: 'asc' },
-      take: 40,
-      select: { original: true, translation: true },
-    });
+    // Кэшируем слова — вместо N запросов на N сообщений, 1 запрос за 5 мин
+    let words = getCachedWords(req.user.id, groupId);
+    if (!words) {
+      const wordsWhere = { userId: req.user.id };
+      if (groupId) wordsWhere.groupId = groupId;
+      words = await prisma.word.findMany({
+        where: wordsWhere,
+        orderBy: { correctCount: 'asc' },
+        take: 40,
+        select: { original: true, translation: true },
+      });
+      setCachedWords(req.user.id, groupId, words);
+    }
     const hasWords = words.length > 0;
 
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');

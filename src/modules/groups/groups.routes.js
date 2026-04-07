@@ -9,23 +9,40 @@ router.use(authMiddleware);
 /**
  * GET /groups
  * Returns user's word groups with word_count, ordered by created_at asc.
+ * Оптимизировано: один агрегатный запрос вместо N+1 через include._count.
  */
 router.get('/', async (req, res) => {
   try {
     const groups = await prisma.wordGroup.findMany({
       where: { userId: req.user.id },
       orderBy: { createdAt: 'asc' },
-      include: {
-        _count: { select: { words: true } },
-      },
     });
+
+    if (groups.length === 0) {
+      return res.json([]);
+    }
+
+    // Один агрегатный запрос — считаем слова по всем группам сразу
+    const wordCounts = await prisma.word.groupBy({
+      by: ['groupId'],
+      where: {
+        groupId: { in: groups.map(g => g.id) },
+      },
+      _count: { groupId: true },
+    });
+
+    const countMap = new Map();
+    for (const wc of wordCounts) {
+      countMap.set(wc.groupId, wc._count.groupId);
+    }
+
     res.json(
       groups.map((g) => ({
         id: g.id,
         name: g.name,
         language: g.language,
         created_at: g.createdAt.toISOString(),
-        word_count: g._count.words,
+        word_count: countMap.get(g.id) || 0,
       }))
     );
   } catch (err) {

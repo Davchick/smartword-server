@@ -7,6 +7,9 @@ const router = express.Router();
 /**
  * GET /profile
  * Returns current user profile (id, email, is_premium, ai_messages_used, created_at, subscription).
+ *
+ * Оптимизировано: без UPDATE на GET. Сброс недельного счётчика —
+ * lazy (при следующем POST/PATCH или через cron).
  */
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -34,17 +37,14 @@ router.get('/', authMiddleware, async (req, res) => {
       !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
     const isPremium = user.isPremium || hasActiveSubscription;
 
-    // Проверяем актуальность недели
+    // Lazy проверка актуальности недели — без UPDATE в БД
     const currentMonday = getMonday(now);
     let wordsLearnedThisWeek = user.wordsLearnedThisWeek || 0;
+    let weekNeedsReset = false;
 
     if (!user.weekStartDate || user.weekStartDate < currentMonday) {
       wordsLearnedThisWeek = 0;
-      // Сбрасываем счётчик в БД
-      await prisma.user.update({
-        where: { id: req.user.id },
-        data: { wordsLearnedThisWeek: 0, weekStartDate: currentMonday },
-      });
+      weekNeedsReset = true;
     }
 
     res.json({
@@ -59,6 +59,7 @@ router.get('/', authMiddleware, async (req, res) => {
         : null,
       words_learned_this_week: wordsLearnedThisWeek,
       weekly_limit: isPremium ? 999999 : 50,
+      _week_needs_reset: weekNeedsReset, // internal flag, not used by client
     });
   } catch (err) {
     console.error('[profile GET]', err);
@@ -79,12 +80,17 @@ function getMonday(date) {
 /**
  * PATCH /profile
  * Optional: update profile fields (e.g. for IAP / is_premium). For now only allow updating ai_messages_used from server-side; client can refetch.
+ *
+ * Lazy reset недельного счётчика — если наступила новая неделя.
  */
 router.patch('/', authMiddleware, async (req, res) => {
   try {
     const { is_premium } = req.body;
     const data = {};
     if (typeof is_premium === 'boolean') data.isPremium = is_premium;
+
+    const now = new Date();
+    const currentMonday = getMonday(now);
 
     if (Object.keys(data).length === 0) {
       const user = await prisma.user.findUnique({
@@ -105,15 +111,11 @@ router.patch('/', authMiddleware, async (req, res) => {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      const now = new Date();
       const hasActiveSubscription =
         !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
       const isPremium = user.isPremium || hasActiveSubscription;
 
-      // Проверяем актуальность недели
-      const currentMonday = getMonday(now);
       let wordsLearnedThisWeek = user.wordsLearnedThisWeek;
-      
       if (!user.weekStartDate || user.weekStartDate < currentMonday) {
         wordsLearnedThisWeek = 0;
       }
@@ -133,6 +135,17 @@ router.patch('/', authMiddleware, async (req, res) => {
       });
     }
 
+    // Lazy reset недели если нужно
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { weekStartDate: true, wordsLearnedThisWeek: true },
+    });
+
+    if (user && (!user.weekStartDate || user.weekStartDate < currentMonday)) {
+      data.weekStartDate = currentMonday;
+      data.wordsLearnedThisWeek = 0;
+    }
+
     const updated = await prisma.user.update({
       where: { id: req.user.id },
       data,
@@ -149,15 +162,11 @@ router.patch('/', authMiddleware, async (req, res) => {
       },
     });
 
-    const now = new Date();
     const hasActiveSubscription =
       !!updated.subscriptionExpiresAt && updated.subscriptionExpiresAt.getTime() > now.getTime();
     const isPremium = updated.isPremium || hasActiveSubscription;
 
-    // Проверяем актуальность недели
-    const currentMonday = getMonday(now);
     let wordsLearnedThisWeek = updated.wordsLearnedThisWeek;
-
     if (!updated.weekStartDate || updated.weekStartDate < currentMonday) {
       wordsLearnedThisWeek = 0;
     }
