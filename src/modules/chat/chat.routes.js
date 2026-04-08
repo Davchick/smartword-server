@@ -11,6 +11,11 @@ const router = express.Router();
 // Максимум бесплатных сообщений ИИ для непремиум-пользователя
 const FREE_MESSAGES_LIMIT = 10;
 
+// Лимиты валидации сообщений
+const MAX_MESSAGE_LENGTH = 1000; // символов на одно сообщение
+const MAX_MESSAGES_COUNT = 50;   // максимум сообщений в одном запросе
+const MAX_TEXT_LENGTH = 500;     // для translate/hint
+
 /**
  * LRU кэш для слов пользователя в чате.
  * TTL: 5 мин — слова меняются редко во время чат-сессии.
@@ -56,6 +61,9 @@ router.post('/translate', authMiddleware, async (req, res) => {
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'text is required' });
     }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return res.status(400).json({ error: `Текст слишком длинный. Максимум: ${MAX_TEXT_LENGTH} символов` });
+    }
     const result = await aiService.translateText(text);
     res.json({ result: result.trim() });
   } catch (err) {
@@ -75,6 +83,9 @@ router.post('/hint', authMiddleware, async (req, res) => {
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'text is required' });
     }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return res.status(400).json({ error: `Текст слишком длинный. Максимум: ${MAX_TEXT_LENGTH} символов` });
+    }
     const result = await aiService.generateHint(text);
     res.json({ result: result.trim() });
   } catch (err) {
@@ -93,6 +104,19 @@ router.post('/', authMiddleware, async (req, res) => {
     const { messages, group_id: groupId, group_name: groupName } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required' });
+    }
+    if (messages.length > MAX_MESSAGES_COUNT) {
+      return res.status(400).json({ error: `Слишком много сообщений. Максимум: ${MAX_MESSAGES_COUNT}` });
+    }
+    // Валидация длины каждого сообщения
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (typeof msg.content !== 'string' || msg.content.length > MAX_MESSAGE_LENGTH) {
+        return res.status(400).json({ error: `Сообщение слишком длинное. Максимум: ${MAX_MESSAGE_LENGTH} символов` });
+      }
+      if (!msg.role || !['user', 'assistant'].includes(msg.role)) {
+        return res.status(400).json({ error: 'Некорректный формат сообщений' });
+      }
     }
 
     const user = await prisma.user.findUnique({
