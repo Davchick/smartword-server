@@ -52,7 +52,7 @@ router.post('/registration', async (req, res) => {
  */
 router.post('/ai-chat', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const ipAddress = req.ip || req.connection.remoteAddress || 'unknown';
     const userAgent = req.headers['user-agent'] || 'unknown';
 
@@ -89,7 +89,7 @@ router.post('/ai-chat', authMiddleware, async (req, res) => {
  */
 router.get('/my', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const consents = await getUserConsents(userId);
 
     res.json({
@@ -115,7 +115,7 @@ router.get('/my', authMiddleware, async (req, res) => {
  */
 router.post('/withdraw', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const { consentType } = req.body || {};
 
     const count = await withdrawConsent({ userId, consentType });
@@ -136,7 +136,7 @@ router.post('/withdraw', authMiddleware, async (req, res) => {
  */
 router.get('/check/:type', authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const { type } = req.params;
 
     const hasConsent = await hasValidConsent({ userId, consentType: type });

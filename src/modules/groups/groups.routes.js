@@ -8,8 +8,9 @@ router.use(authMiddleware);
 
 /**
  * GET /groups
- * Returns user's word groups with word_count, ordered by created_at asc.
- * Оптимизировано: один агрегатный запрос вместо N+1 через include._count.
+ * Returns user's word groups with word_count и learned_count, ordered by created_at asc.
+ * Оптимизировано: два агрегатных запроса заменяют отдельный запрос слов с клиента.
+ * Клиент больше не делает GET /words?fields=group_id,correct_count для подсчёта прогресса.
  */
 router.get('/', async (req, res) => {
   try {
@@ -22,18 +23,33 @@ router.get('/', async (req, res) => {
       return res.json([]);
     }
 
-    // Один агрегатный запрос — считаем слова по всем группам сразу
-    const wordCounts = await prisma.word.groupBy({
-      by: ['groupId'],
-      where: {
-        groupId: { in: groups.map(g => g.id) },
-      },
-      _count: { groupId: true },
-    });
+    const groupIds = groups.map(g => g.id);
 
-    const countMap = new Map();
-    for (const wc of wordCounts) {
-      countMap.set(wc.groupId, wc._count.groupId);
+    // Два параллельных агрегатных запроса — считаем total и learned слова
+    const [totalCounts, learnedCounts] = await Promise.all([
+      prisma.word.groupBy({
+        by: ['groupId'],
+        where: { groupId: { in: groupIds } },
+        _count: { groupId: true },
+      }),
+      prisma.word.groupBy({
+        by: ['groupId'],
+        where: {
+          groupId: { in: groupIds },
+          correctCount: { gte: 5 },
+        },
+        _count: { groupId: true },
+      }),
+    ]);
+
+    const totalMap = new Map();
+    for (const wc of totalCounts) {
+      totalMap.set(wc.groupId, wc._count.groupId);
+    }
+
+    const learnedMap = new Map();
+    for (const wc of learnedCounts) {
+      learnedMap.set(wc.groupId, wc._count.groupId);
     }
 
     res.json(
@@ -42,7 +58,8 @@ router.get('/', async (req, res) => {
         name: g.name,
         language: g.language,
         created_at: g.createdAt.toISOString(),
-        word_count: countMap.get(g.id) || 0,
+        word_count: totalMap.get(g.id) || 0,
+        learned_count: learnedMap.get(g.id) || 0,
       }))
     );
   } catch (err) {
@@ -75,6 +92,7 @@ router.post('/', async (req, res) => {
       language: group.language,
       created_at: group.createdAt.toISOString(),
       word_count: group._count.words,
+      learned_count: 0,
     });
   } catch (err) {
     console.error('[groups POST]', err);
@@ -110,6 +128,7 @@ router.patch('/:id', async (req, res) => {
       language: updated.language,
       created_at: updated.createdAt.toISOString(),
       word_count: updated._count.words,
+      learned_count: 0,
     });
   } catch (err) {
     console.error('[groups PATCH]', err);

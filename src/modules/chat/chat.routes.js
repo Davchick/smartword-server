@@ -4,6 +4,7 @@ const { authMiddleware } = require('../../middleware/auth');
 const aiService = require('./aiService');
 const achievementsService = require('../achievements/achievements.service');
 const streaksService = require('../streaks/streaks.service');
+const { LRUCache } = require('../../utils/lruCache');
 
 const router = express.Router();
 
@@ -11,33 +12,38 @@ const router = express.Router();
 const FREE_MESSAGES_LIMIT = 10;
 
 /**
- * In-memory кэш для слов пользователя в чате.
+ * LRU кэш для слов пользователя в чате.
  * TTL: 5 мин — слова меняются редко во время чат-сессии.
  * Снижает нагрузку на БД: вместо N запросов на N сообщений — 1 запрос за 5 мин.
  */
-const chatWordsCache = new Map();
-const CHAT_WORDS_CACHE_TTL_MS = 5 * 60 * 1000;
-const CHAT_WORDS_CACHE_MAX = 5000;
+const chatWordsCache = new LRUCache(5000, 5 * 60 * 1000);
 
 function getCachedWords(userId, groupId) {
   const key = `${userId}:${groupId || 'none'}`;
-  const entry = chatWordsCache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.timestamp > CHAT_WORDS_CACHE_TTL_MS) {
-    chatWordsCache.delete(key);
-    return null;
-  }
-  return entry.words;
+  return chatWordsCache.get(key);
 }
 
 function setCachedWords(userId, groupId, words) {
-  if (chatWordsCache.size >= CHAT_WORDS_CACHE_MAX) {
-    const oldestKey = chatWordsCache.keys().next().value;
-    chatWordsCache.delete(oldestKey);
-  }
   const key = `${userId}:${groupId || 'none'}`;
-  chatWordsCache.set(key, { words, timestamp: Date.now() });
+  chatWordsCache.set(key, words);
 }
+
+/**
+ * Инвалидирует кэш слов для пользователя (все группы).
+ * Вызывается при изменении слов — чтобы чат использовал актуальные данные.
+ */
+function invalidateCachedWords(userId) {
+  // Удаляем все записи для данного пользователя
+  // chatWordsCache использует ключи вида "userId:groupId"
+  for (const key of chatWordsCache.cache.keys()) {
+    if (key.startsWith(`${userId}:`)) {
+      chatWordsCache.delete(key);
+    }
+  }
+}
+
+// Экспортируем для использования из words.routes.js
+module.exports.invalidateCachedWords = invalidateCachedWords;
 
 /**
  * POST /chat/translate

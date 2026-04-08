@@ -2,8 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const { env } = require('./config/env');
 const { securityHeaders } = require('./middleware/securityHeaders');
+const { etagMiddleware } = require('./middleware/etag');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const { requestLogger } = require('./middleware/requestLogger');
 
 const app = express();
 
@@ -20,8 +22,14 @@ app.use(cors());
 
 app.use(express.json({ limit: '10mb' })); // Limit body size
 
+// Request logging — каждый запрос: метод, путь, статус, время
+app.use(requestLogger);
+
 // Cache-Control headers для API
 app.use(require('./middleware/cacheControl').cacheControl);
+
+// ETag для GET-запросов — экономия трафика через 304 Not Modified
+app.use(etagMiddleware);
 
 // Healthcheck (no rate limiting for health checks)
 app.get('/health', (_req, res) => {

@@ -4,18 +4,20 @@ const { authMiddleware } = require('../../middleware/auth');
 const achievementsService = require('../achievements/achievements.service');
 const streaksService = require('../streaks/streaks.service');
 const statsRoutes = require('../stats/stats.routes');
+const chatRoutes = require('../chat/chat.routes');
 
 const router = express.Router();
 
 router.use(authMiddleware);
 
 /**
- * GET /words?groupId=...&archived=true&fields=groupId,correctCount&limit=100&cursor=...
+ * GET /words?groupId=...&archived=true&fields=groupId,correctCount&limit=100&cursor=...&search=...
  * List words for current user, optional filters.
  *
  * Параметры:
  *  - groupId: фильтр по группе
  *  - archived: true (только выученные) / false (только не выученные)
+ *  - search: поиск по original или translation (case-insensitive)
  *  - fields: comma-separated список полей (по умолчанию все). Пример: "id,groupId,correctCount"
  *  - limit: максимум записей (по умолчанию 200, максимум 500)
  *  - cursor: ID последнего полученного слова (cursor-based pagination)
@@ -24,12 +26,20 @@ router.use(authMiddleware);
  */
 router.get('/', async (req, res) => {
   try {
-    const { groupId, archived, fields, limit: limitStr, cursor } = req.query;
+    const { groupId, archived, fields, limit: limitStr, cursor, search } = req.query;
 
     const where = { userId: req.user.id };
     if (groupId && typeof groupId === 'string') where.groupId = groupId;
     if (archived === 'true') where.correctCount = { gte: 5 };
     if (archived === 'false') where.correctCount = { lt: 5 };
+    // Server-side search
+    if (search && typeof search === 'string' && search.trim()) {
+      const q = search.trim().toLowerCase();
+      where.OR = [
+        { original: { contains: q, mode: 'insensitive' } },
+        { translation: { contains: q, mode: 'insensitive' } },
+      ];
+    }
 
     // Парсим limit с ограничениями безопасности
     const limit = Math.min(Math.max(1, Number(limitStr) || 200), 500);
@@ -89,7 +99,7 @@ function getWordSelect(fields) {
     original: true,
     translation: true,
     correct_count: 'correctCount',
-    last_reviewed: true,
+    last_reviewed: 'lastReviewed',
     created_at: 'createdAt',
   };
   const select = {};
@@ -314,6 +324,8 @@ router.post('/:id/progress', async (req, res) => {
 
     // Инвалидируем кэш stats — данные изменились
     statsRoutes.invalidateCachedStats(req.user.id);
+    // Инвалидируем кэш слов чата — чтобы ИИ использовал актуальные слова
+    chatRoutes.invalidateCachedWords(req.user.id);
 
     res.json({
       id,
@@ -487,6 +499,8 @@ router.post('/progress/batch', async (req, res) => {
 
     // Инвалидируем кэш stats — данные изменились
     statsRoutes.invalidateCachedStats(req.user.id);
+    // Инвалидируем кэш слов чата — чтобы ИИ использовал актуальные слова
+    chatRoutes.invalidateCachedWords(req.user.id);
 
     res.json({
       updated: result.updated,

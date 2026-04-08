@@ -2,6 +2,7 @@ const express = require('express');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
 const { Prisma } = require('@prisma/client');
+const { LRUCache } = require('../../utils/lruCache');
 
 const router = express.Router();
 
@@ -17,30 +18,11 @@ function getDayLabel(date) {
 }
 
 /**
- * In-memory кэш для stats.
+ * LRU кэш для stats.
  * TTL: 60 сек — снижает нагрузку на БД при частых запросах.
+ * 5000 entries — достаточно для 250K пользователей (LRU сам чистит).
  */
-const statsCache = new Map();
-const STATS_CACHE_TTL_MS = 60 * 1000;
-const STATS_CACHE_MAX = 5000;
-
-function getCachedStats(userId) {
-  const entry = statsCache.get(userId);
-  if (!entry) return null;
-  if (Date.now() - entry.timestamp > STATS_CACHE_TTL_MS) {
-    statsCache.delete(userId);
-    return null;
-  }
-  return entry.data;
-}
-
-function setCachedStats(userId, data) {
-  if (statsCache.size >= STATS_CACHE_MAX) {
-    const oldestKey = statsCache.keys().next().value;
-    statsCache.delete(oldestKey);
-  }
-  statsCache.set(userId, { data, timestamp: Date.now() });
-}
+const statsCache = new LRUCache(5000, 60 * 1000);
 
 /**
  * Инвалидирует кэш stats для пользователя.
@@ -52,6 +34,15 @@ function invalidateCachedStats(userId) {
 
 // Экспортируем для использования из других модулей
 module.exports.invalidateCachedStats = invalidateCachedStats;
+
+// Обёртки для совместимости с существующим кодом
+function getCachedStats(userId) {
+  return statsCache.get(userId);
+}
+
+function setCachedStats(userId, data) {
+  statsCache.set(userId, data);
+}
 
 /**
  * GET /stats
@@ -95,7 +86,7 @@ router.get('/', authMiddleware, async (req, res) => {
     const activeDatesResult = await prisma.$queryRaw`
       SELECT DISTINCT DATE("lastReviewed") as date
       FROM "Word"
-      WHERE "userId" = ${userId}::uuid
+      WHERE "userId" = ${userId}
         AND "lastReviewed" >= ${weekAgo}
         AND "lastReviewed" IS NOT NULL
     `;

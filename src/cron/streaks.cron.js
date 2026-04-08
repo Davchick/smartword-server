@@ -1,4 +1,4 @@
-const { prisma } = require('../../db/prisma');
+const { prisma } = require('../db/prisma');
 const streaksService = require('../modules/streaks/streaks.service');
 const achievementsService = require('../modules/achievements/achievements.service');
 

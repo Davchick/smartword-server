@@ -116,4 +116,11 @@ async function authMiddleware(req, res, next) {
   }
 }
 
-module.exports = { authMiddleware };
+/**
+ * Инвалидация кеша пользователя (например, после обновления подписки)
+ */
+function invalidateUserCache(userId) {
+  userCache.delete(userId);
+}
+
+module.exports = { authMiddleware, invalidateUserCache };

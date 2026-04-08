@@ -35,6 +35,7 @@ model User {
   trainingProgress    TrainingProgress[]
   userAchievements    UserAchievement[]
   userStreak          UserStreak?
+  payments            Payment[]
 }
 
 model PasswordResetToken {
@@ -167,6 +168,21 @@ model ConsentLog {
   
   @@index([userId])
   @@index([email])
+  @@index([createdAt])
+}
+
+model Payment {
+  id                 String   @id @default(uuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  yookassaPaymentId  String   @unique
+  planId             String
+  amount             Float?
+  status             String   @default("succeeded")
+  createdAt          DateTime @default(now())
+
+  @@index([userId])
+  @@index([yookassaPaymentId])
   @@index([createdAt])
 }
 

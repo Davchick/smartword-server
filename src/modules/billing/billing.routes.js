@@ -122,9 +122,44 @@ router.post('/create-payment', authMiddleware, async (req, res) => {
 /**
  * POST /billing/webhook
  * Webhook от ЮKassa. Обрабатываем только payment.succeeded.
+ * Верификация: проверяем Basic Auth (shopId:secretKey) — YooKassa отправляет
+ * его в Authorization заголовке при отправке webhook.
  */
 router.post('/webhook', express.json({ type: 'application/json' }), async (req, res) => {
   try {
+    // 1. Верификация Basic Auth от YooKassa
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Basic ')) {
+      console.warn('[billing/webhook] Missing Basic Auth header');
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    try {
+      const credentials = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+      const [shopId, secretKey] = credentials.split(':');
+
+      if (!shopId || !secretKey) {
+        console.warn('[billing/webhook] Invalid Basic Auth format');
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+
+      // Сравниваем с конфигами (constant-time comparison для безопасности)
+      const expectedShopId = env.yookassaShopId;
+      const expectedSecretKey = env.yookassaSecretKey;
+
+      if (
+        shopId !== expectedShopId ||
+        secretKey !== expectedSecretKey
+      ) {
+        console.warn('[billing/webhook] Invalid Basic Auth credentials');
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+    } catch (err) {
+      console.warn('[billing/webhook] Failed to parse Basic Auth:', err.message);
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    // 2. Проверка payload
     const event = req.body?.event;
     const object = req.body?.object;
 
@@ -136,6 +171,13 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
       return res.status(200).json({ ok: true });
     }
 
+    // 3. Дополнительно: проверяем, что paymentId есть и это объект платежа
+    const paymentId = object?.id;
+    if (!paymentId) {
+      console.warn('[billing/webhook] Missing payment id in payment.succeeded');
+      return res.status(400).json({ error: 'missing_payment_id' });
+    }
+
     const metadata = object.metadata || {};
     const userId = metadata.userId;
     const planId = metadata.planId;
@@ -144,6 +186,17 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     if (!userId || !planId || !durationDays || !PLANS[planId]) {
       // eslint-disable-next-line no-console
       console.error('[billing/webhook] Missing metadata in payment.succeeded', metadata);
+      return res.status(200).json({ ok: true });
+    }
+
+    // 4. Проверка: не обработали ли уже этот платёж (идемпотентность)
+    const existingPayment = await prisma.payment.findFirst({
+      where: { yookassaPaymentId: paymentId },
+      select: { id: true },
+    });
+
+    if (existingPayment) {
+      console.log('[billing/webhook] Payment already processed:', paymentId);
       return res.status(200).json({ ok: true });
     }
 
@@ -169,14 +222,33 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     const msToAdd = durationDays * 24 * 60 * 60 * 1000;
     const newExpiresAt = new Date(baseDate.getTime() + msToAdd);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        subscriptionType: planId,
-        subscriptionExpiresAt: newExpiresAt,
-        isPremium: true,
-      },
+    // 5. Обновляем пользователя + записываем платёж для идемпотентности
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          subscriptionType: planId,
+          subscriptionExpiresAt: newExpiresAt,
+          isPremium: true,
+        },
+      });
+
+      await tx.payment.create({
+        data: {
+          userId: user.id,
+          yookassaPaymentId: paymentId,
+          planId,
+          amount: object.amount?.value ? parseFloat(object.amount.value) : null,
+          status: object.status || 'succeeded',
+        },
+      });
     });
+
+    // 6. Инвалидируем auth cache, чтобы isPremium обновился немедленно
+    const { invalidateUserCache } = require('../../middleware/auth');
+    invalidateUserCache(user.id);
+
+    console.log(`[billing/webhook] Payment processed: user=${user.id}, plan=${planId}, expires=${newExpiresAt.toISOString()}`);
 
     return res.status(200).json({ ok: true });
   } catch (err) {
