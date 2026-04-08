@@ -47,8 +47,7 @@ function invalidateCachedWords(userId) {
   }
 }
 
-// Экспортируем для использования из words.routes.js
-module.exports.invalidateCachedWords = invalidateCachedWords;
+// Экспорт будет в конце файла через router.invalidateCachedWords
 
 /**
  * POST /chat/translate
@@ -263,5 +262,7 @@ router.get('/usage', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to get usage stats' });
   }
 });
+
+router.invalidateCachedWords = invalidateCachedWords;
 
 module.exports = router;

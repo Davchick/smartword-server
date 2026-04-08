@@ -1,6 +1,16 @@
 const { prisma } = require('../../db/prisma');
 
 /**
+ * Локальная дата без смещения часового пояса
+ */
+function toLocalDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
  * Получить текущий streak пользователя
  */
 const getUserStreak = async (userId) => {
@@ -165,7 +175,7 @@ const getHistory = async (userId) => {
     date.setHours(0, 0, 0, 0);
     
     history.push({
-      date: date.toISOString().split('T')[0],
+      date: toLocalDateStr(date),
       active: false
     });
   }
@@ -188,7 +198,7 @@ const getHistory = async (userId) => {
   });
 
   // Отмечаем активные дни
-  const activeDates = trainingDays.map(t => t.date.toISOString().split('T')[0]);
+  const activeDates = trainingDays.map(t => toLocalDateStr(t.date));
   history.forEach(day => {
     if (activeDates.includes(day.date)) {
       day.active = true;

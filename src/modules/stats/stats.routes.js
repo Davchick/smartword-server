@@ -10,7 +10,11 @@ const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 const LEARNED_THRESHOLD = 5;
 
 function toDateStr(date) {
-  return date.toISOString().split('T')[0];
+  // Локальная дата (без смещения часового пояса)
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function getDayLabel(date) {
@@ -32,8 +36,7 @@ function invalidateCachedStats(userId) {
   statsCache.delete(userId);
 }
 
-// Экспортируем для использования из других модулей
-module.exports.invalidateCachedStats = invalidateCachedStats;
+// Экспортируется через router.invalidateCachedStats (см. конец файла)
 
 // Обёртки для совместимости с существующим кодом
 function getCachedStats(userId) {
@@ -222,5 +225,8 @@ router.post('/training-progress', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// attach invalidateCachedStats to router so other modules can require it
+router.invalidateCachedStats = invalidateCachedStats;
 
 module.exports = router;
