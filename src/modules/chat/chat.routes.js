@@ -55,6 +55,10 @@ function invalidateCachedWords(userId) {
  * Returns: { result }
  */
 router.post('/translate', authMiddleware, async (req, res) => {
+  // AbortController для отмены при disconnect клиента
+  const abortController = new AbortController();
+  req.socket.on('close', () => { abortController.abort(); });
+
   try {
     const { text } = req.body;
     if (!text || typeof text !== 'string') {
@@ -63,9 +67,15 @@ router.post('/translate', authMiddleware, async (req, res) => {
     if (text.length > MAX_TEXT_LENGTH) {
       return res.status(400).json({ error: `Текст слишком длинный. Максимум: ${MAX_TEXT_LENGTH} символов` });
     }
-    const result = await aiService.translateText(text);
+    const result = await aiService.translateText(text, { abortSignal: abortController.signal });
     res.json({ result: result.trim() });
   } catch (err) {
+    if (err.message === 'Request aborted by client') {
+      if (!req.socket.destroyed) {
+        return res.status(499).json({ error: 'Client disconnected' });
+      }
+      return;
+    }
     console.error('[chat/translate]', err);
     res.status(502).json({ error: 'AI service error' });
   }
@@ -77,6 +87,10 @@ router.post('/translate', authMiddleware, async (req, res) => {
  * Returns: { result }
  */
 router.post('/hint', authMiddleware, async (req, res) => {
+  // AbortController для отмены при disconnect клиента
+  const abortController = new AbortController();
+  req.socket.on('close', () => { abortController.abort(); });
+
   try {
     const { text } = req.body;
     if (!text || typeof text !== 'string') {
@@ -85,9 +99,15 @@ router.post('/hint', authMiddleware, async (req, res) => {
     if (text.length > MAX_TEXT_LENGTH) {
       return res.status(400).json({ error: `Текст слишком длинный. Максимум: ${MAX_TEXT_LENGTH} символов` });
     }
-    const result = await aiService.generateHint(text);
+    const result = await aiService.generateHint(text, { abortSignal: abortController.signal });
     res.json({ result: result.trim() });
   } catch (err) {
+    if (err.message === 'Request aborted by client') {
+      if (!req.socket.destroyed) {
+        return res.status(499).json({ error: 'Client disconnected' });
+      }
+      return;
+    }
     console.error('[chat/hint]', err);
     res.status(502).json({ error: 'AI service error' });
   }
@@ -99,6 +119,10 @@ router.post('/hint', authMiddleware, async (req, res) => {
  * Returns: { reply, messages_used } or 403 { error: "limit_reached", used }
  */
 router.post('/', authMiddleware, async (req, res) => {
+  // AbortController для отмены при disconnect клиента
+  const abortController = new AbortController();
+  req.socket.on('close', () => { abortController.abort(); });
+
   try {
     const { messages, group_id: groupId, group_name: groupName } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -120,7 +144,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { isPremium: true, aiMessagesUsed: true, subscriptionExpiresAt: true },
+      select: { isPremium: true, aiMessagesUsed: true, subscriptionExpiresAt: true, lastAiMessageResetAt: true },
     });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -131,7 +155,21 @@ router.post('/', authMiddleware, async (req, res) => {
       !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
     const isPremium = user.isPremium || hasActiveSubscription;
 
-    const currentUsed = user.aiMessagesUsed ?? 0;
+    // Daily reset: если последний сброс был не сегодня — обнуляем счётчик
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const lastReset = user.lastAiMessageResetAt ? new Date(user.lastAiMessageResetAt) : null;
+    const isNewDay = !lastReset || lastReset < today;
+
+    let currentUsed = user.aiMessagesUsed ?? 0;
+
+    if (!isPremium && isNewDay) {
+      // Сбрасываем счётчик — новый день
+      currentUsed = 0;
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: { aiMessagesUsed: 0, lastAiMessageResetAt: now },
+      });
+    }
 
     if (!isPremium && currentUsed >= FREE_MESSAGES_LIMIT) {
       return res.status(403).json({
@@ -211,7 +249,7 @@ CONVERSATION RULES:
 - Never correct grammar. Never say "Great job!". Just talk like a human.`;
     }
 
-    const reply = await aiService.chat(messages, systemPrompt);
+    const reply = await aiService.chat(messages, systemPrompt, { abortSignal: abortController.signal });
 
     // Первое приветственное сообщение ИИ для непремиум-пользователя не засчитываем
     let newCount = currentUsed;
@@ -221,7 +259,7 @@ CONVERSATION RULES:
       newCount = currentUsed + 1;
       await prisma.user.update({
         where: { id: req.user.id },
-        data: { aiMessagesUsed: newCount },
+        data: { aiMessagesUsed: newCount, lastAiMessageResetAt: now },
       });
       
       // Обновляем достижения для AI chat
@@ -244,6 +282,12 @@ CONVERSATION RULES:
 
     res.json({ reply: reply || '...', messages_used: newCount });
   } catch (err) {
+    if (err.message === 'Request aborted by client') {
+      if (!abortController.signal.aborted) {
+        return res.status(499).json({ error: 'Client disconnected' });
+      }
+      return;
+    }
     console.error('[chat POST]', err);
     res.status(500).json({ error: 'Internal server error' });
   }

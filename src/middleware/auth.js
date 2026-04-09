@@ -94,6 +94,7 @@ async function authMiddleware(req, res, next) {
           email: true,
           isPremium: true,
           aiMessagesUsed: true,
+          lastAiMessageResetAt: true,
           createdAt: true,
         },
       });

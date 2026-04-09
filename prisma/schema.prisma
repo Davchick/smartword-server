@@ -16,9 +16,10 @@ model User {
   googleId       String?        @unique
   googleEmail    String?
   googlePicture  String?
-  isPremium      Boolean        @default(false)
-  aiMessagesUsed Int            @default(0)
-  createdAt      DateTime       @default(now())
+  isPremium            Boolean   @default(false)
+  aiMessagesUsed       Int       @default(0)
+  lastAiMessageResetAt DateTime  @default(now())
+  createdAt            DateTime  @default(now())
 
   // Лимит выученных слов в неделю (50 для бесплатных, безлимит для Premium)
   wordsLearnedThisWeek Int      @default(0)

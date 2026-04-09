@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { dailyStreakCheck, syncAchievementsProgress } = require('./streaks.cron');
+const { cleanupUnverifiedUsers } = require('./cleanup.cron');
 const { prisma } = require('../db/prisma');
 
 /**
@@ -18,6 +19,13 @@ const initCronJobs = () => {
   // Синхронизация достижений каждый час
   cron.schedule('0 * * * *', async () => {
     await syncAchievementsProgress(prisma);
+  }, {
+    timezone: 'Europe/Moscow'
+  });
+
+  // Удаление непроверенных аккаунтов каждые 6 часов (в 00:00, 06:00, 12:00, 18:00 МСК)
+  cron.schedule('0 */6 * * *', async () => {
+    await cleanupUnverifiedUsers();
   }, {
     timezone: 'Europe/Moscow'
   });

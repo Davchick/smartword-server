@@ -85,8 +85,44 @@ initializeAchievements();
 
 const port = env.port;
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`API server listening on port ${port}`);
 });
+
+// Graceful shutdown for Render deploys
+process.on('SIGTERM', () => {
+  console.log('[Server] SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('[Server] Closed. Process terminated.');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  server.close(() => {
+    process.exit(0);
+  });
+});
+
+// Prevent crashes from unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
+  // Не падаем — логируем и продолжаем
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[Server] Uncaught Exception:', error);
+  // Логируем, но не падаем — пусть сервер работает
+});
+
+// Handle client disconnects — abort in-flight AI requests
+server.on('connection', (socket) => {
+  socket.on('close', () => {
+    // Socket closed — any in-flight request will get req.socket.destroyed = true
+    // This is checked in chat.routes.js error handlers
+  });
+});
+
+module.exports = server;
 

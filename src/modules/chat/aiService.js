@@ -59,7 +59,6 @@ function getNextKey() {
 function markKeyFailed(key) {
   const count = keyFailureCounts.get(key) || 0;
   keyFailureCounts.set(key, count + 1);
-  console.log(`[OpenRouter] Key marked as failed: ${key.substring(0, 8)}... (failures: ${count + 1})`);
 }
 
 /**
@@ -78,7 +77,6 @@ function markKeySuccess(key) {
  */
 function resetDailyUsage() {
   keyDailyUsage.clear();
-  console.log('[OpenRouter] Daily usage reset');
 }
 
 // Автосброс использования каждые 24 часа
@@ -89,12 +87,15 @@ setInterval(resetDailyUsage, 24 * 60 * 60 * 1000);
  * @param {Array} messages - Массив сообщений {role, content}
  * @param {number} maxTokens - Максимум токенов в ответе
  * @param {number} temperature - Температура генерации
+ * @param {object} options - Дополнительные опции (abortSignal для отмены при disconnect клиента)
  * @returns {Promise<string>} Ответ AI
  */
-async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85) {
+async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85, options = {}) {
   if (apiKeys.length === 0) {
     throw new Error('No OpenRouter API keys configured');
   }
+
+  const { abortSignal } = options;
 
   // Пробуем каждый ключ (максимум 2 круга)
   for (let attempt = 0; attempt < apiKeys.length * 2; attempt++) {
@@ -104,9 +105,21 @@ async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85) {
     }
 
     try {
-      // 30-секундный таймаут — если OpenRouter не отвечает, не держим соединение
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+      if (abortSignal && abortSignal.aborted) {
+        clearTimeout(timeoutId);
+        throw new Error('Request aborted by client');
+      }
+
+      const abortListener = () => {
+        clearTimeout(timeoutId);
+        controller.abort();
+      };
+      if (abortSignal) {
+        abortSignal.addEventListener('abort', abortListener, { once: true });
+      }
 
       const response = await fetch(OPENROUTER_URL, {
         method: 'POST',
@@ -126,57 +139,69 @@ async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85) {
       });
 
       clearTimeout(timeoutId);
+      if (abortSignal) {
+        abortSignal.removeEventListener('abort', abortListener);
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
         const errorCode = response.status;
-        
-        // 429 — Rate limit или исчерпан дневной лимит
+
+        // 429 — Rate limit
         if (errorCode === 429) {
           markKeyFailed(apiKey);
-          console.log(`[OpenRouter] Key ${attempt + 1} rate limited (429), trying next key...`);
-          continue; // Пробуем следующий ключ
+          continue;
         }
-        
+
         // 401/403 — Неверный ключ
         if (errorCode === 401 || errorCode === 403) {
           markKeyFailed(apiKey);
-          console.error(`[OpenRouter] Key ${attempt + 1} unauthorized/forbidden (401/403), trying next...`);
           continue;
         }
-        
-        // 500/502/503 — Ошибка сервера
+
+        // 5xx — Ошибка сервера OpenRouter
         if (errorCode >= 500 && errorCode < 600) {
           markKeyFailed(apiKey);
-          console.log(`[OpenRouter] Key ${attempt + 1} server error (${errorCode}), trying next...`);
           continue;
         }
-        
-        // Другие ошибки — выбрасываем
+
         throw new Error(`OpenRouter error: ${errorCode} ${errorText}`);
       }
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content ?? '';
-      
-      // Успех — сбрасываем счётчик неудач и увеличиваем использование
+
+      // Проверяем, что OpenRouter не вернул ошибку в content (бывает при 200)
+      if (content && (content.includes('Internal server error') || content.includes('rate limit exceeded') || content.includes('overloaded'))) {
+        throw new Error(`OpenRouter returned error in content: ${content}`);
+      }
+
       markKeySuccess(apiKey);
-      
+
       if (!content) {
         throw new Error('Empty response from AI');
       }
-      
+
       return content;
-      
+
     } catch (error) {
-      // Если это не ошибка ответа (например, network error) — пробуем следующий ключ
-      if (!error.message.includes('OpenRouter error')) {
+      // Клиент отключился — пробрасываем сразу
+      if (error.name === 'AbortError' && abortSignal && abortSignal.aborted) {
+        throw new Error('Request aborted by client');
+      }
+
+      // Network error — пробуем следующий ключ
+      if (error.name === 'TypeError' || error.name === 'AbortError') {
         markKeyFailed(apiKey);
-        console.log(`[OpenRouter] Key ${attempt + 1} network error, trying next...`);
         continue;
       }
-      
-      // Другие ошибки — пробрасываем
+
+      // Другие ошибки — пробуем следующий ключ
+      if (!error.message.includes('OpenRouter error')) {
+        markKeyFailed(apiKey);
+        continue;
+      }
+
       throw error;
     }
   }
@@ -187,29 +212,29 @@ async function callOpenRouter(messages, maxTokens = 300, temperature = 0.85) {
 /**
  * Обёртка для translate endpoint
  */
-async function translateText(text) {
+async function translateText(text, options = {}) {
   const prompt = `Translate the following text into Russian. Return ONLY the translation, no explanations, no quotes:\n\n${text}`;
-  return await callOpenRouter([{ role: 'user', content: prompt }], 200, 0.5);
+  return await callOpenRouter([{ role: 'user', content: prompt }], 200, 0.5, options);
 }
 
 /**
  * Обёртка для hint endpoint
  */
-async function generateHint(text) {
+async function generateHint(text, options = {}) {
   const prompt = `The user is learning a foreign language and doesn't know how to respond to this message:\n\n"${text}"\n\nWrite 2-3 short natural reply suggestions. CRITICAL RULES:\n- Use EXACTLY the same language, dialect, and style as the message above. If the message is in American English slang — reply in American English slang. If Arabic — reply in Arabic. If French — reply in French. Zero exceptions.\n- Never use Russian or any other language not present in the message.\n- Match the tone and register precisely (casual, formal, slang, etc.).\n- Keep each suggestion to one short sentence.\n- Format as a numbered list (1. 2. 3.). No explanations, no translations.`;
-  return await callOpenRouter([{ role: 'user', content: prompt }], 200, 0.5);
+  return await callOpenRouter([{ role: 'user', content: prompt }], 200, 0.5, options);
 }
 
 /**
  * Обёртка для chat endpoint
  */
-async function chat(messages, systemPrompt) {
+async function chat(messages, systemPrompt, options = {}) {
   const openRouterMessages = [
     { role: 'system', content: systemPrompt },
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ];
-  
-  return await callOpenRouter(openRouterMessages, 300, 0.85);
+
+  return await callOpenRouter(openRouterMessages, 300, 0.85, options);
 }
 
 /**

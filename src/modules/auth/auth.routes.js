@@ -158,6 +158,8 @@ router.post('/login', authLimiter, async (req, res) => {
         return res.status(403).json({
           error: 'Подтвердите почту по ссылке из письма, затем войдите снова.',
           code: 'EMAIL_NOT_VERIFIED',
+          email: normalizedEmail,
+          can_request_resend: true,
         });
       }
     }

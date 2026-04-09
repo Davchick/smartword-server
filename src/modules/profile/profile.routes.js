@@ -8,7 +8,7 @@ const router = express.Router();
  * GET /profile
  * Returns current user profile (id, email, is_premium, ai_messages_used, created_at, subscription).
  *
- * Оптимизировано: без UPDATE на GET. Сброс недельного счётчика —
+ * Оптимизировано: без UPDATE на GET. Сброс счётчиков —
  * lazy (при следующем POST/PATCH или через cron).
  */
 router.get('/', authMiddleware, async (req, res) => {
@@ -20,6 +20,7 @@ router.get('/', authMiddleware, async (req, res) => {
         email: true,
         isPremium: true,
         aiMessagesUsed: true,
+        lastAiMessageResetAt: true,
         createdAt: true,
         subscriptionType: true,
         subscriptionExpiresAt: true,
@@ -37,6 +38,12 @@ router.get('/', authMiddleware, async (req, res) => {
       !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
     const isPremium = user.isPremium || hasActiveSubscription;
 
+    // Lazy daily reset для aiMessagesUsed
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const lastReset = user.lastAiMessageResetAt ? new Date(user.lastAiMessageResetAt) : null;
+    const isNewDay = !lastReset || lastReset < today;
+    let aiMessagesUsed = isNewDay ? 0 : (user.aiMessagesUsed ?? 0);
+
     // Lazy проверка актуальности недели — без UPDATE в БД
     const currentMonday = getMonday(now);
     let wordsLearnedThisWeek = user.wordsLearnedThisWeek || 0;
@@ -51,7 +58,7 @@ router.get('/', authMiddleware, async (req, res) => {
       id: user.id,
       email: user.email,
       is_premium: isPremium,
-      ai_messages_used: user.aiMessagesUsed,
+      ai_messages_used: aiMessagesUsed,
       created_at: user.createdAt.toISOString(),
       subscription_type: user.subscriptionType || null,
       subscription_expires_at: user.subscriptionExpiresAt
@@ -100,6 +107,7 @@ router.patch('/', authMiddleware, async (req, res) => {
           email: true,
           isPremium: true,
           aiMessagesUsed: true,
+          lastAiMessageResetAt: true,
           createdAt: true,
           subscriptionType: true,
           subscriptionExpiresAt: true,
@@ -115,6 +123,12 @@ router.patch('/', authMiddleware, async (req, res) => {
         !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
       const isPremium = user.isPremium || hasActiveSubscription;
 
+      // Lazy daily reset
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const lastReset = user.lastAiMessageResetAt ? new Date(user.lastAiMessageResetAt) : null;
+      const isNewDay = !lastReset || lastReset < today;
+      let aiMessagesUsed = isNewDay ? 0 : (user.aiMessagesUsed ?? 0);
+
       let wordsLearnedThisWeek = user.wordsLearnedThisWeek;
       if (!user.weekStartDate || user.weekStartDate < currentMonday) {
         wordsLearnedThisWeek = 0;
@@ -124,7 +138,7 @@ router.patch('/', authMiddleware, async (req, res) => {
         id: user.id,
         email: user.email,
         is_premium: isPremium,
-        ai_messages_used: user.aiMessagesUsed,
+        ai_messages_used: aiMessagesUsed,
         created_at: user.createdAt.toISOString(),
         subscription_type: user.subscriptionType || null,
         subscription_expires_at: user.subscriptionExpiresAt
