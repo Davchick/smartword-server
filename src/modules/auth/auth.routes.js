@@ -225,7 +225,6 @@ router.post('/google', async (req, res) => {
     const googleId = payload.sub;
     const email = payload.email?.trim().toLowerCase();
     const emailVerified = payload.email_verified === true;
-    const picture = payload.picture || null;
 
     if (!email || !googleId) {
       return res.status(400).json({ error: 'Google token missing email or sub' });
@@ -245,7 +244,6 @@ router.post('/google', async (req, res) => {
           data: {
             googleId,
             googleEmail: email,
-            googlePicture: picture,
             emailVerified: true,
           },
         });
@@ -259,7 +257,6 @@ router.post('/google', async (req, res) => {
             emailVerified: true,
             googleId,
             googleEmail: email,
-            googlePicture: picture,
           },
         });
       }
