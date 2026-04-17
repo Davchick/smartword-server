@@ -30,7 +30,7 @@ const prisma = new PrismaClient({
         { emit: 'event', level: 'error' },
         { emit: 'event', level: 'warn' },
       ]
-    : ['query', 'error', 'warn'],
+    : ['error', 'warn'], //dev mode: only errors + warnings
 });
 
 // Log slow queries in production for monitoring

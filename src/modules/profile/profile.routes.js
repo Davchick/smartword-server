@@ -59,6 +59,7 @@ router.get('/', authMiddleware, async (req, res) => {
       email: user.email,
       is_premium: isPremium,
       ai_messages_used: aiMessagesUsed,
+      last_ai_message_reset_at: lastReset ? lastReset.toISOString() : null,
       created_at: user.createdAt.toISOString(),
       subscription_type: user.subscriptionType || null,
       subscription_expires_at: user.subscriptionExpiresAt
@@ -139,6 +140,7 @@ router.patch('/', authMiddleware, async (req, res) => {
         email: user.email,
         is_premium: isPremium,
         ai_messages_used: aiMessagesUsed,
+        last_ai_message_reset_at: lastReset ? lastReset.toISOString() : null,
         created_at: user.createdAt.toISOString(),
         subscription_type: user.subscriptionType || null,
         subscription_expires_at: user.subscriptionExpiresAt
@@ -168,6 +170,7 @@ router.patch('/', authMiddleware, async (req, res) => {
         email: true,
         isPremium: true,
         aiMessagesUsed: true,
+        lastAiMessageResetAt: true,
         createdAt: true,
         subscriptionType: true,
         subscriptionExpiresAt: true,
@@ -190,6 +193,7 @@ router.patch('/', authMiddleware, async (req, res) => {
       email: updated.email,
       is_premium: isPremium,
       ai_messages_used: updated.aiMessagesUsed,
+      last_ai_message_reset_at: updated.lastAiMessageResetAt ? updated.lastAiMessageResetAt.toISOString() : null,
       created_at: updated.createdAt.toISOString(),
       subscription_type: updated.subscriptionType || null,
       subscription_expires_at: updated.subscriptionExpiresAt

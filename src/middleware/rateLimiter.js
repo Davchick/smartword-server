@@ -1,6 +1,11 @@
 const rateLimit = require('express-rate-limit');
 
 const isDev = process.env.NODE_ENV === 'development';
+const isProduction = process.env.NODE_ENV === 'production';
+
+const devValidate = false;
+const prodValidate = isProduction ? { trustProxy: 1, xForwardedForHeader: true } : false;
+const validateConfig = isProduction ? prodValidate : devValidate;
 
 /**
  * Rate limiter for authentication endpoints.
@@ -14,10 +19,9 @@ const authLimiter = rateLimit({
     code: 'RATE_LIMIT_EXCEEDED',
     retryAfter: '15 minutes'
   },
-  standardHeaders: true, // Return rate limit info in headers
+  standardHeaders: true,
   legacyHeaders: false,
-  validate: { xForwardedForHeader: true, trustProxy: true },
-  // Use built-in IP handling (works with IPv4 and IPv6)
+  validate: validateConfig, // Disabled for dev
 });
 
 /**
@@ -34,7 +38,7 @@ const passwordResetLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { xForwardedForHeader: true, trustProxy: true },
+  validate: validateConfig,
 });
 
 /**
@@ -51,7 +55,7 @@ const refreshLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { xForwardedForHeader: true, trustProxy: true },
+  validate: validateConfig,
 });
 
 /**
@@ -67,7 +71,7 @@ const apiLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { xForwardedForHeader: true, trustProxy: true },
+  validate: validateConfig,
 });
 
 /**
@@ -83,7 +87,7 @@ const strictLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { xForwardedForHeader: true, trustProxy: true },
+  validate: validateConfig,
 });
 
 module.exports = {

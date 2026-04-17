@@ -9,9 +9,11 @@ const { requestLogger } = require('./middleware/requestLogger');
 
 const app = express();
 
-// Trust proxy for Render (required for express-rate-limit to work correctly)
-// We disable validation in rateLimiter.js to avoid false positives
-app.set('trust proxy', true);
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
 
 // Security first: Apply security headers to ALL routes
 app.use(securityHeaders);
@@ -47,7 +49,6 @@ const wordsRouter = require('./modules/words/words.routes');
 const statsRouter = require('./modules/stats/stats.routes');
 const chatRouter = require('./modules/chat/chat.routes');
 const billingRouter = require('./modules/billing/billing.routes');
-const achievementsRouter = require('./modules/achievements/achievements.routes');
 const streaksRouter = require('./modules/streaks/streaks.routes');
 const consentRouter = require('./modules/consent/consent.routes');
 
@@ -58,7 +59,6 @@ app.use('/words', wordsRouter);
 app.use('/stats', statsRouter);
 app.use('/chat', chatRouter);
 app.use('/billing', billingRouter);
-app.use('/achievements', achievementsRouter);
 app.use('/streaks', streaksRouter);
 app.use('/consent', consentRouter);
 
@@ -78,10 +78,6 @@ if (isTelegramEnabled) {
 // Initialize cron jobs
 const { initCronJobs } = require('./cron');
 initCronJobs();
-
-// Initialize achievements
-const { initializeAchievements } = require('./modules/achievements/achievements.service');
-initializeAchievements();
 
 const port = env.port;
 

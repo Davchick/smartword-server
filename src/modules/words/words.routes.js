@@ -1,7 +1,6 @@
 const express = require('express');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
-const achievementsService = require('../achievements/achievements.service');
 const streaksService = require('../streaks/streaks.service');
 const statsRoutes = require('../stats/stats.routes');
 const chatRoutes = require('../chat/chat.routes');
@@ -312,12 +311,7 @@ router.post('/:id/progress', async (req, res) => {
       };
     });
 
-    // Достижения и streak — вне транзакции (не критично если упадут)
-    if (result.justLearned) {
-      achievementsService.checkAndUpdate(req.user.id, 'word_learned', 1).catch(err => {
-        console.error('[words POST progress] Achievement check error:', err?.message || err);
-      });
-    }
+    // Streak — вне транзакции (не критично если упадет)
     streaksService.checkIn(req.user.id).catch(err => {
       console.error('[words POST progress] Streak check-in error:', err?.message || err);
     });
@@ -487,12 +481,7 @@ router.post('/progress/batch', async (req, res) => {
       };
     });
 
-    // Достижения и streak — вне транзакции (не критично если упадут)
-    if (totalJustLearned > 0) {
-      achievementsService.checkAndUpdate(req.user.id, 'word_learned', totalJustLearned).catch(err => {
-        console.error('[words/batch] Achievement check error:', err);
-      });
-    }
+    // Streak — вне транзакции (не критично если упадет)
     streaksService.checkIn(req.user.id).catch(err => {
       console.error('[words/batch] Streak check-in error:', err);
     });

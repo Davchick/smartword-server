@@ -2,7 +2,6 @@ const express = require('express');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
 const aiService = require('./aiService');
-const achievementsService = require('../achievements/achievements.service');
 const streaksService = require('../streaks/streaks.service');
 const { LRUCache } = require('../../utils/lruCache');
 
@@ -262,22 +261,12 @@ CONVERSATION RULES:
         data: { aiMessagesUsed: newCount, lastAiMessageResetAt: now },
       });
       
-      // Обновляем достижения для AI chat
+      // Обновляем streak (check-in при активности)
       try {
-        const unlockedAchievements = await achievementsService.checkAndUpdate(req.user.id, 'chat_message', 1);
-        if (unlockedAchievements.length > 0) {
-          console.log('[chat] Achievements unlocked:', unlockedAchievements.map(a => a.title));
-        }
+        await streaksService.checkIn(req.user.id);
       } catch (err) {
-        console.error('[chat] Achievement check error:', err);
+        console.error('[chat] Streak check-in error:', err);
       }
-    }
-
-    // Обновляем streak (check-in при активности)
-    try {
-      await streaksService.checkIn(req.user.id);
-    } catch (err) {
-      console.error('[chat] Streak check-in error:', err);
     }
 
     res.json({ reply: reply || '...', messages_used: newCount });

@@ -33,7 +33,6 @@ model User {
   refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
   trainingProgress    TrainingProgress[]
-  userAchievements    UserAchievement[]
   userStreak          UserStreak?
   payments            Payment[]
 }
@@ -102,40 +101,6 @@ model TrainingProgress {
   createdAt DateTime @default(now())
 
   @@unique([userId, date])
-}
-
-// Достижения пользователей
-model Achievement {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  title       String
-  description String
-  icon        String
-  category    String   // streak, words, swipe, chat
-  threshold   Int      // Значение для получения (дни, количество слов и т.д.)
-  points      Int      @default(0) // Очки за достижение
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  
-  userAchievements UserAchievement[]
-
-  @@index([category])
-}
-
-model UserAchievement {
-  id             String    @id @default(uuid())
-  userId         String
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  achievementId  String
-  achievement    Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
-  progress       Int       @default(0) // Текущий прогресс
-  unlocked       Boolean   @default(false)
-  unlockedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  @@unique([userId, achievementId])
-  @@index([userId, unlocked])
 }
 
 // Streak - ежедневные тренировки

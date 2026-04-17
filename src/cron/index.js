@@ -1,7 +1,6 @@
 const cron = require('node-cron');
-const { dailyStreakCheck, syncAchievementsProgress } = require('./streaks.cron');
+const { dailyStreakCheck } = require('./streaks.cron');
 const { cleanupUnverifiedUsers } = require('./cleanup.cron');
-const { prisma } = require('../db/prisma');
 
 /**
  * Инициализация cron задач
@@ -12,13 +11,6 @@ const initCronJobs = () => {
   // Ежедневная проверка streaks в 3:00 AM
   cron.schedule('0 3 * * *', async () => {
     await dailyStreakCheck();
-  }, {
-    timezone: 'Europe/Moscow'
-  });
-
-  // Синхронизация достижений каждый час
-  cron.schedule('0 * * * *', async () => {
-    await syncAchievementsProgress(prisma);
   }, {
     timezone: 'Europe/Moscow'
   });
