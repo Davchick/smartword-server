@@ -123,7 +123,7 @@ router.post('/', authMiddleware, async (req, res) => {
   req.socket.on('close', () => { abortController.abort(); });
 
   try {
-    const { messages, group_id: groupId, group_name: groupName } = req.body;
+    const { messages, group_id: groupId, group_name: groupName, isInitialMessage } = req.body;
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required' });
     }
@@ -251,16 +251,24 @@ CONVERSATION RULES:
     const reply = await aiService.chat(messages, systemPrompt, { abortSignal: abortController.signal });
 
     // Первое приветственное сообщение ИИ для непремиум-пользователя не засчитываем
-    let newCount = currentUsed;
-    const shouldBill = isPremium ? true : currentUsed > 0;
+    // Но счётчик ВСЕГДА обновляется в БД для синхронизации состояния между запросами
+    // isInitialMessage — служебное сообщение от фронтенда (выбор словаря/свободное общение) не засчитываем
+    const shouldBill = isPremium ? true : (isInitialMessage ? false : currentUsed > 0);
+    const newCount = currentUsed + 1;
+
+    // ВСЕГДА обновляем БД — синхронизируем состояние между запросами
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { aiMessagesUsed: newCount, lastAiMessageResetAt: now },
+    });
+
+    // Определяем, что показать клиенту:
+    // - Для премиум: показываем сколько сообщений использовано (newCount - 1 = currentUsed)
+    // - Для непремиум: первое бесплатное показываем как 0, последующие - сколько использовано
+    //   newCount - 1 = текущее использование (0 для первого, 1 для второго...)
+    const clientCount = newCount - 1;
 
     if (shouldBill) {
-      newCount = currentUsed + 1;
-      await prisma.user.update({
-        where: { id: req.user.id },
-        data: { aiMessagesUsed: newCount, lastAiMessageResetAt: now },
-      });
-      
       // Обновляем streak (check-in при активности)
       try {
         await streaksService.checkIn(req.user.id);
@@ -269,7 +277,7 @@ CONVERSATION RULES:
       }
     }
 
-    res.json({ reply: reply || '...', messages_used: newCount });
+    res.json({ reply: reply || '...', messages_used: clientCount });
   } catch (err) {
     if (err.message === 'Request aborted by client') {
       if (!abortController.signal.aborted) {
