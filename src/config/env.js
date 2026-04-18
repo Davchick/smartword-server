@@ -128,6 +128,7 @@ const env = {
   yookassaShopId: process.env.YOOKASSA_SHOP_ID || '',
   yookassaSecretKey: process.env.YOOKASSA_SECRET_KEY || '',
   yookassaReturnUrl: process.env.YOOKASSA_RETURN_URL || process.env.APP_PUBLIC_URL || process.env.BASE_URL || (isProduction ? 'https://api.smartword.app' : 'http://localhost:3000'),
+  yookassaNotificationSecret: process.env.YOOKASSA_NOTIFICATION_SECRET || '',
 
   // Telegram Support Bot
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',

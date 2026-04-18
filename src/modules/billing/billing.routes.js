@@ -1,5 +1,5 @@
 const express = require('express');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
 const { env } = require('../../config/env');
@@ -70,7 +70,7 @@ router.post('/create-payment', authMiddleware, async (req, res) => {
       description: plan.description,
       confirmation: {
         type: 'redirect',
-        return_url: env.yookassaReturnUrl,
+        return_url: `${env.yookassaReturnUrl}#/payment/success`,
       },
       metadata: {
         userId: req.user.id,
@@ -143,20 +143,37 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
         return res.status(401).json({ error: 'unauthorized' });
       }
 
-      // Сравниваем с конфигами (constant-time comparison для безопасности)
       const expectedShopId = env.yookassaShopId;
       const expectedSecretKey = env.yookassaSecretKey;
 
-      if (
-        shopId !== expectedShopId ||
-        secretKey !== expectedSecretKey
-      ) {
+      if (!expectedShopId || !expectedSecretKey) {
+        console.error('[billing/webhook] YooKassa credentials not configured');
+        return res.status(503).json({ error: 'service_unavailable' });
+      }
+
+      if (shopId !== expectedShopId || secretKey !== expectedSecretKey) {
         console.warn('[billing/webhook] Invalid Basic Auth credentials');
         return res.status(401).json({ error: 'unauthorized' });
       }
     } catch (err) {
       console.warn('[billing/webhook] Failed to parse Basic Auth:', err.message);
       return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    const notificationSecret = env.yookassaNotificationSecret;
+    if (notificationSecret) {
+      const signature = req.headers['authorization']?.replace(/^sha256=/, '') ||
+                      req.headers['x-yookassa-signature']?.replace(/^sha256=/, '');
+      if (signature) {
+        const payload = JSON.stringify(req.body);
+        const expectedSig = createHmac('sha256', notificationSecret).update(payload).digest('hex');
+        const sigBuffer = Buffer.from(signature, 'hex');
+        const expectedBuffer = Buffer.from(expectedSig, 'hex');
+        if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+          console.warn('[billing/webhook] Invalid HMAC signature');
+          return res.status(401).json({ error: 'unauthorized' });
+        }
+      }
     }
 
     // 2. Проверка payload
@@ -184,8 +201,14 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     const durationDays = Number(metadata.durationDays) || 0;
 
     if (!userId || !planId || !durationDays || !PLANS[planId]) {
-      // eslint-disable-next-line no-console
-      console.error('[billing/webhook] Missing metadata in payment.succeeded', metadata);
+      console.error('[billing/webhook] Missing or invalid metadata', metadata);
+      return res.status(200).json({ ok: true });
+    }
+
+    const expectedAmount = PLANS[planId].amount;
+    const receivedAmount = object.amount?.value ? parseFloat(object.amount.value) : null;
+    if (receivedAmount === null || Math.abs(receivedAmount - expectedAmount) > 0.01) {
+      console.error('[billing/webhook] Amount mismatch', { expectedAmount, receivedAmount, planId });
       return res.status(200).json({ ok: true });
     }
 
