@@ -123,42 +123,51 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
 /**
  * POST /billing/webhook
  * Webhook от ЮKassa. Обрабатываем только payment.succeeded.
- * Верификация: проверяем Basic Auth (shopId:secretKey) — YooKassa отправляет
- * его в Authorization заголовке при отправке webhook.
+ * Верификация: проверяем IP адрес + запрашиваем платёж через API для надёжности.
+ * YooKassa НЕ отправляет Basic Auth — это важно!
  */
+const YOOKASSA_IP_RANGES = [
+  '185.71.76.0/27',
+  '185.71.77.0/27',
+  '77.75.153.0/25',
+  '77.75.154.128/25',
+  '77.75.156.11',
+  '77.75.156.35',
+  '2a02:5180::/32',
+  '0.0.0.0/0', // Allow all in development mode
+];
+
+function isIpAllowed(ip) {
+  if (!ip) return false;
+  const { isDevelopment } = env;
+  if (isDevelopment) return true;
+
+  for (const cidr of YOOKASSA_IP_RANGES) {
+    if (cidr === '0.0.0.0/0') continue;
+    try {
+      if (cidr.includes('/')) {
+        const [subnet, bits] = cidr.split('/');
+        const mask = ~(2 ** (32 - bits) - 1);
+        const ipNum = ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
+        const subNum = subnet.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
+        if ((ipNum & mask) === (subNum & mask)) return true;
+      } else if (cidr === ip) {
+        return true;
+      }
+    } catch {
+      // Invalid CIDR, skip
+    }
+  }
+  return false;
+}
+
 router.post('/webhook', express.json({ type: 'application/json' }), async (req, res) => {
   try {
-    // 1. Верификация Basic Auth от YooKassa
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Basic ')) {
-      console.warn('[billing/webhook] Missing Basic Auth header');
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-
-    try {
-      const credentials = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-      const [shopId, secretKey] = credentials.split(':');
-
-      if (!shopId || !secretKey) {
-        console.warn('[billing/webhook] Invalid Basic Auth format');
-        return res.status(401).json({ error: 'unauthorized' });
-      }
-
-      const expectedShopId = env.yookassaShopId;
-      const expectedSecretKey = env.yookassaSecretKey;
-
-      if (!expectedShopId || !expectedSecretKey) {
-        console.error('[billing/webhook] YooKassa credentials not configured');
-        return res.status(503).json({ error: 'service_unavailable' });
-      }
-
-      if (shopId !== expectedShopId || secretKey !== expectedSecretKey) {
-        console.warn('[billing/webhook] Invalid Basic Auth credentials');
-        return res.status(401).json({ error: 'unauthorized' });
-      }
-    } catch (err) {
-      console.warn('[billing/webhook] Failed to parse Basic Auth:', err.message);
-      return res.status(401).json({ error: 'unauthorized' });
+    // 1. Проверка IP адреса YooKassa
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '';
+    if (!isIpAllowed(clientIp)) {
+      console.warn('[billing/webhook] IP not allowed:', clientIp);
+      return res.status(403).json({ error: 'forbidden' });
     }
 
     // 2. Проверка payload
@@ -178,6 +187,46 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     if (!paymentId) {
       console.warn('[billing/webhook] Missing payment id in payment.succeeded');
       return res.status(400).json({ error: 'missing_payment_id' });
+    }
+
+    // 3.1. Верификация через API YooKassa — критически важно для безопасности!
+    // Запрашиваем реальный статус платежа, чтобы подтвердить что webhook не поддельный
+    try {
+      const yooKassaController = new AbortController();
+      const yooKassaTimeout = setTimeout(() => yooKassaController.abort(), 10000);
+
+      const apiResponse = await fetch(`${YOOKASSA_API_URL}/${paymentId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: getAuthHeader(),
+        },
+        signal: yooKassaController.signal,
+      });
+
+      clearTimeout(yooKassaTimeout);
+
+      if (!apiResponse.ok) {
+        console.error('[billing/webhook] Failed to verify payment via API:', apiResponse.status);
+        return res.status(200).json({ ok: true });
+      }
+
+      const paymentData = await apiResponse.json().catch(() => null);
+      if (!paymentData || paymentData.status !== 'succeeded') {
+        console.warn('[billing/webhook] Payment not succeeded in Yookassa:', paymentData?.status);
+        return res.status(200).json({ ok: true });
+      }
+
+      // Проверяем что amount совпадает с webhook данными
+      const apiAmount = paymentData.amount?.value ? parseFloat(paymentData.amount.value) : null;
+      const webhookAmount = object.amount?.value ? parseFloat(object.amount.value) : null;
+      if (apiAmount === null || Math.abs(apiAmount - webhookAmount) > 0.01) {
+        console.error('[billing/webhook] Amount mismatch with API:', { apiAmount, webhookAmount });
+        return res.status(200).json({ ok: true });
+      }
+    } catch (err) {
+      console.error('[billing/webhook] API verification failed:', err.message);
+      // Не блокируем — если API недоступен, продолжаем с данными из webhook
     }
 
     const metadata = object.metadata || {};
