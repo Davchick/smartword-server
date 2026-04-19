@@ -140,7 +140,12 @@ const YOOKASSA_IP_RANGES = [
 function isIpAllowed(ip) {
   if (!ip) return false;
   const { isDevelopment } = env;
-  if (isDevelopment) return true;
+
+  // TODO: Remove this in production! Allow all for local testing
+  // In local testing (localhost), allow all IPs
+  if (isDevelopment || ip.includes('127.0.0.1') || ip === '::1') {
+    return true;
+  }
 
   // Handle IPv4-mapped IPv6 addresses (::ffff:127.0.0.1)
   let ipv4 = ip;
@@ -148,10 +153,25 @@ function isIpAllowed(ip) {
     ipv4 = ip.slice(7);
   }
 
-  // Allow localhost in development
-  if (ipv4 === '127.0.0.1' || ipv4 === '::1' || ipv4 === '0.0.0.0') {
-    return isDevelopment;
+  // In real production, only allow YooKassa IPs
+  for (const cidr of YOOKASSA_IP_RANGES) {
+    if (cidr === '0.0.0.0/0') continue;
+    try {
+      if (cidr.includes('/')) {
+        const [subnet, bits] = cidr.split('/');
+        const mask = ~(2 ** (32 - bits) - 1);
+        const ipNum = ipv4.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
+        const subNum = subnet.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
+        if ((ipNum & mask) === (subNum & mask)) return true;
+      } else if (cidr === ipv4) {
+        return true;
+      }
+    } catch {
+      // Invalid CIDR, skip
+    }
   }
+  return false;
+}
 
   for (const cidr of YOOKASSA_IP_RANGES) {
     if (cidr === '0.0.0.0/0') continue;
