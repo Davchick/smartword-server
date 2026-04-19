@@ -173,25 +173,6 @@ function isIpAllowed(ip) {
   return false;
 }
 
-  for (const cidr of YOOKASSA_IP_RANGES) {
-    if (cidr === '0.0.0.0/0') continue;
-    try {
-      if (cidr.includes('/')) {
-        const [subnet, bits] = cidr.split('/');
-        const mask = ~(2 ** (32 - bits) - 1);
-        const ipNum = ipv4.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-        const subNum = subnet.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-        if ((ipNum & mask) === (subNum & mask)) return true;
-      } else if (cidr === ipv4) {
-        return true;
-      }
-    } catch {
-      // Invalid CIDR, skip
-    }
-  }
-  return false;
-}
-
 router.post('/webhook', express.json({ type: 'application/json' }), async (req, res) => {
   try {
     // 1. Проверка IP адреса YooKassa
