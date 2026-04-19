@@ -90,10 +90,32 @@ const strictLimiter = rateLimit({
   validate: validateConfig,
 });
 
+/**
+ * Rate limiter for payment creation.
+ * Strict limits to prevent payment abuse and fraud.
+ */
+const paymentLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: isDev ? 20 : 10, // 20 in dev, 10 in production per hour
+  message: {
+    error: 'Too many payment attempts',
+    code: 'RATE_LIMIT_EXCEEDED',
+    retryAfter: '1 hour'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: validateConfig,
+  keyGenerator: (req) => {
+    // Rate limit by user ID if authenticated, otherwise by IP
+    return req.user?.id || req.ip;
+  },
+});
+
 module.exports = {
   authLimiter,
   passwordResetLimiter,
   refreshLimiter,
   apiLimiter,
   strictLimiter,
+  paymentLimiter,
 };

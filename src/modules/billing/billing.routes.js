@@ -1,8 +1,9 @@
 const express = require('express');
-const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
+const { randomUUID } = require('crypto');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
 const { env } = require('../../config/env');
+const { paymentLimiter } = require('../../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -45,7 +46,7 @@ function getAuthHeader() {
  * Body: { planId: 'month' | 'half_year' | 'year', method: 'card' | 'sbp' | 'sberpay' | 'tpay' }
  * Returns: { payment_id, status, confirmation_url }
  */
-router.post('/create-payment', authMiddleware, async (req, res) => {
+router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) => {
   try {
     const { planId, method } = req.body || {};
 
@@ -101,7 +102,7 @@ router.post('/create-payment', authMiddleware, async (req, res) => {
 
     if (!response.ok) {
       // eslint-disable-next-line no-console
-      console.error('[billing/create-payment] YooKassa error', response.status, data);
+      console.error('[billing/create-payment] YooKassa error', response.status, data?.error);
       return res.status(502).json({ error: 'yookassa_error' });
     }
 
@@ -158,22 +159,6 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     } catch (err) {
       console.warn('[billing/webhook] Failed to parse Basic Auth:', err.message);
       return res.status(401).json({ error: 'unauthorized' });
-    }
-
-    const notificationSecret = env.yookassaNotificationSecret;
-    if (notificationSecret) {
-      const signature = req.headers['authorization']?.replace(/^sha256=/, '') ||
-                      req.headers['x-yookassa-signature']?.replace(/^sha256=/, '');
-      if (signature) {
-        const payload = JSON.stringify(req.body);
-        const expectedSig = createHmac('sha256', notificationSecret).update(payload).digest('hex');
-        const sigBuffer = Buffer.from(signature, 'hex');
-        const expectedBuffer = Buffer.from(expectedSig, 'hex');
-        if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
-          console.warn('[billing/webhook] Invalid HMAC signature');
-          return res.status(401).json({ error: 'unauthorized' });
-        }
-      }
     }
 
     // 2. Проверка payload
@@ -233,6 +218,7 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     });
 
     if (!user) {
+      console.error('[billing/webhook] User not found, payment was not credited:', { userId, paymentId });
       return res.status(200).json({ ok: true });
     }
 
