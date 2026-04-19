@@ -142,16 +142,27 @@ function isIpAllowed(ip) {
   const { isDevelopment } = env;
   if (isDevelopment) return true;
 
+  // Handle IPv4-mapped IPv6 addresses (::ffff:127.0.0.1)
+  let ipv4 = ip;
+  if (ip.startsWith('::ffff:')) {
+    ipv4 = ip.slice(7);
+  }
+
+  // Allow localhost in development
+  if (ipv4 === '127.0.0.1' || ipv4 === '::1' || ipv4 === '0.0.0.0') {
+    return isDevelopment;
+  }
+
   for (const cidr of YOOKASSA_IP_RANGES) {
     if (cidr === '0.0.0.0/0') continue;
     try {
       if (cidr.includes('/')) {
         const [subnet, bits] = cidr.split('/');
         const mask = ~(2 ** (32 - bits) - 1);
-        const ipNum = ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
+        const ipNum = ipv4.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
         const subNum = subnet.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
         if ((ipNum & mask) === (subNum & mask)) return true;
-      } else if (cidr === ip) {
+      } else if (cidr === ipv4) {
         return true;
       }
     } catch {
