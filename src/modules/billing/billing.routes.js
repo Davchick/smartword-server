@@ -76,6 +76,7 @@ const YOOKASSA_METHOD_MAP = {
   tpay: 'tinkoff_bank',
 };
 const CARD_METHOD = YOOKASSA_METHOD_MAP.card;
+const SHOULD_FORCE_NON_CARD_METHOD = env.yookassaForceNonCardMethod;
 
 function getAuthHeader() {
   if (!env.yookassaShopId || !env.yookassaSecretKey) {
@@ -85,6 +86,24 @@ function getAuthHeader() {
     'base64',
   );
   return `Basic ${credentials}`;
+}
+
+function shouldAttachPaymentMethodData(requestedMethodType) {
+  if (!requestedMethodType) return false;
+  if (requestedMethodType === CARD_METHOD) return true;
+  return SHOULD_FORCE_NON_CARD_METHOD;
+}
+
+function getYooKassaErrorMessage(errorBody) {
+  if (!errorBody || typeof errorBody !== 'object') return null;
+  return (
+    errorBody.description ||
+    errorBody.message ||
+    errorBody.parameter ||
+    errorBody.code ||
+    errorBody.type ||
+    null
+  );
 }
 
 /**
@@ -127,7 +146,7 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
         method,
       },
     };
-    if (requestedMethodType) {
+    if (shouldAttachPaymentMethodData(requestedMethodType)) {
       body.payment_method_data = { type: requestedMethodType };
     }
 
@@ -151,9 +170,28 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
+      const yookassaError = {
+        status: response.status,
+        type: data?.type || null,
+        code: data?.code || null,
+        description: data?.description || null,
+        parameter: data?.parameter || null,
+        requestedMethodType,
+      };
       // eslint-disable-next-line no-console
-      console.error('[billing/create-payment] YooKassa error', response.status, data?.error);
-      return res.status(502).json({ error: 'yookassa_error' });
+      console.error('[billing/create-payment] YooKassa error', JSON.stringify(yookassaError));
+
+      if (response.status === 400 && requestedMethodType && requestedMethodType !== CARD_METHOD) {
+        return res.status(409).json({
+          error: 'payment_method_unavailable',
+          message: 'Выбранный способ оплаты временно недоступен. Попробуйте другой способ.',
+          requested_method: method,
+          requested_payment_method_type: requestedMethodType,
+          details: getYooKassaErrorMessage(data),
+        });
+      }
+
+      return res.status(502).json({ error: 'yookassa_error', details: getYooKassaErrorMessage(data) });
     }
 
     const confirmationUrl = data?.confirmation?.confirmation_url;
