@@ -5,8 +5,8 @@ const { env } = require('../../config/env');
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // === МОДЕЛЬ ===
-// Используем только arcee-ai/trinity-large-preview:free
-const MODEL = 'arcee-ai/trinity-large-preview:free';
+// Используем minimax/minimax-m2.5:free
+const MODEL = 'minimax/minimax-m2.5:free';
 
 // Пул API ключей OpenRouter (для увеличения бесплатных лимитов)
 // Каждый ключ с пополнением $10+ даёт 1,000 бесплатных запросов/день
