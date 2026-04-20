@@ -22,7 +22,12 @@ app.use(securityHeaders);
 // (у мобильного приложения нет origin, CORS не проверяется)
 app.use(cors());
 
-app.use(express.json({ limit: '10mb' })); // Limit body size
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    req.rawBody = buf.toString();
+  }
+})); // Limit body size
 
 // Request logging — каждый запрос: метод, путь, статус, время
 app.use(requestLogger);

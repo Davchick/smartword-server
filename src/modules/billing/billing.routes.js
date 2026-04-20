@@ -1,13 +1,27 @@
 const express = require('express');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHmac } = require('crypto');
 const { prisma } = require('../../db/prisma');
 const { authMiddleware } = require('../../middleware/auth');
 const { env } = require('../../config/env');
 const { paymentLimiter } = require('../../middleware/rateLimiter');
 
-const router = express.Router();
+const router = express.Router({ mergeParams: true });
 
 const YOOKASSA_API_URL = 'https://api.yookassa.ru/v3/payments';
+
+function verifyYookassaSignature(body, signature) {
+  if (!env.yookassaSecretKey || !signature) {
+    return false;
+  }
+  const expected = createHmac('sha256', env.yookassaSecretKey)
+    .update(body, 'utf8')
+    .digest('base64');
+  return expected === signature;
+}
+
+function getRawBody(req) {
+  return req.rawBody || JSON.stringify(req.body);
+}
 
 const PLANS = {
   month: {
@@ -134,18 +148,10 @@ const YOOKASSA_IP_RANGES = [
   '77.75.156.11',
   '77.75.156.35',
   '2a02:5180::/32',
-  '0.0.0.0/0', // Allow all in development mode
 ];
 
 function isIpAllowed(ip) {
   if (!ip) return false;
-  const { isDevelopment } = env;
-
-  // TODO: Remove this in production! Allow all for local testing
-  // In local testing (localhost), allow all IPs
-  if (isDevelopment || ip.includes('127.0.0.1') || ip === '::1') {
-    return true;
-  }
 
   // Handle IPv4-mapped IPv6 addresses (::ffff:127.0.0.1)
   let ipv4 = ip;
@@ -153,9 +159,8 @@ function isIpAllowed(ip) {
     ipv4 = ip.slice(7);
   }
 
-  // In real production, only allow YooKassa IPs
+  // Only allow YooKassa IPs in production
   for (const cidr of YOOKASSA_IP_RANGES) {
-    if (cidr === '0.0.0.0/0') continue;
     try {
       if (cidr.includes('/')) {
         const [subnet, bits] = cidr.split('/');
@@ -190,6 +195,14 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
       return res.status(400).json({ error: 'invalid_payload' });
     }
 
+    // 2.1. Верификация подписи YooKassa
+    const signature = req.headers['x-yookassa-signature'];
+    const rawBody = getRawBody(req);
+    if (!verifyYookassaSignature(rawBody, signature)) {
+      console.warn('[billing/webhook] Invalid signature');
+      return res.status(403).json({ error: 'invalid_signature' });
+    }
+
     if (event !== 'payment.succeeded') {
       return res.status(200).json({ ok: true });
     }
@@ -220,13 +233,13 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
 
       if (!apiResponse.ok) {
         console.error('[billing/webhook] Failed to verify payment via API:', apiResponse.status);
-        return res.status(200).json({ ok: true });
+        return res.status(503).json({ error: 'verification_failed' });
       }
 
       const paymentData = await apiResponse.json().catch(() => null);
       if (!paymentData || paymentData.status !== 'succeeded') {
         console.warn('[billing/webhook] Payment not succeeded in Yookassa:', paymentData?.status);
-        return res.status(200).json({ ok: true });
+        return res.status(200).json({ ok: false, reason: 'payment_not_succeeded' });
       }
 
       // Проверяем что amount совпадает с webhook данными
@@ -234,11 +247,11 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
       const webhookAmount = object.amount?.value ? parseFloat(object.amount.value) : null;
       if (apiAmount === null || Math.abs(apiAmount - webhookAmount) > 0.01) {
         console.error('[billing/webhook] Amount mismatch with API:', { apiAmount, webhookAmount });
-        return res.status(200).json({ ok: true });
+        return res.status(200).json({ ok: false, reason: 'amount_mismatch' });
       }
     } catch (err) {
       console.error('[billing/webhook] API verification failed:', err.message);
-      // Не блокируем — если API недоступен, продолжаем с данными из webhook
+      return res.status(503).json({ error: 'verification_unavailable' });
     }
 
     const metadata = object.metadata || {};
@@ -255,7 +268,7 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     const receivedAmount = object.amount?.value ? parseFloat(object.amount.value) : null;
     if (receivedAmount === null || Math.abs(receivedAmount - expectedAmount) > 0.01) {
       console.error('[billing/webhook] Amount mismatch', { expectedAmount, receivedAmount, planId });
-      return res.status(200).json({ ok: true });
+      return res.status(200).json({ ok: false, reason: 'amount_mismatch' });
     }
 
     // 4. Проверка: не обработали ли уже этот платёж (идемпотентность)
