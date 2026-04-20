@@ -44,6 +44,12 @@ const PLANS = {
 // Варианты способов оплаты на фронте — на бэкенде пока не навязываем тип,
 // чтобы не ломать сценарии, если что-то изменится на стороне ЮKassa.
 const ALLOWED_METHODS = new Set(['card', 'sbp', 'sberpay', 'tpay']);
+const YOOKASSA_METHOD_MAP = {
+  card: 'bank_card',
+  sbp: 'sbp',
+  sberpay: 'sberbank',
+  tpay: 'tinkoff_bank',
+};
 
 function getAuthHeader() {
   if (!env.yookassaShopId || !env.yookassaSecretKey) {
@@ -94,6 +100,10 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
         method,
       },
     };
+    const paymentMethodType = YOOKASSA_METHOD_MAP[method];
+    if (paymentMethodType) {
+      body.payment_method_data = { type: paymentMethodType };
+    }
 
     // 15-секундный таймаут для YooKassa — не держим соединение при медленном ответе
     const yooKassaController = new AbortController();
@@ -140,54 +150,9 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
  * Верификация: проверяем IP адрес + запрашиваем платёж через API для надёжности.
  * YooKassa НЕ отправляет Basic Auth — это важно!
  */
-const YOOKASSA_IP_RANGES = [
-  '185.71.76.0/27',
-  '185.71.77.0/27',
-  '77.75.153.0/25',
-  '77.75.154.128/25',
-  '77.75.156.11',
-  '77.75.156.35',
-  '2a02:5180::/32',
-];
-
-function isIpAllowed(ip) {
-  if (!ip) return false;
-
-  // Handle IPv4-mapped IPv6 addresses (::ffff:127.0.0.1)
-  let ipv4 = ip;
-  if (ip.startsWith('::ffff:')) {
-    ipv4 = ip.slice(7);
-  }
-
-  // Only allow YooKassa IPs in production
-  for (const cidr of YOOKASSA_IP_RANGES) {
-    try {
-      if (cidr.includes('/')) {
-        const [subnet, bits] = cidr.split('/');
-        const mask = ~(2 ** (32 - bits) - 1);
-        const ipNum = ipv4.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-        const subNum = subnet.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-        if ((ipNum & mask) === (subNum & mask)) return true;
-      } else if (cidr === ipv4) {
-        return true;
-      }
-    } catch {
-      // Invalid CIDR, skip
-    }
-  }
-  return false;
-}
-
 router.post('/webhook', express.json({ type: 'application/json' }), async (req, res) => {
   try {
-    // 1. Проверка IP адреса YooKassa
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '';
-    if (!isIpAllowed(clientIp)) {
-      console.warn('[billing/webhook] IP not allowed:', clientIp);
-      return res.status(403).json({ error: 'forbidden' });
-    }
-
-    // 2. Проверка payload
+    // 1. Проверка payload
     const event = req.body?.event;
     const object = req.body?.object;
 
@@ -195,7 +160,7 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
       return res.status(400).json({ error: 'invalid_payload' });
     }
 
-    // 2.1. Верификация подписи YooKassa
+    // 1.1. Верификация подписи YooKassa
     const signature = req.headers['x-yookassa-signature'];
     const rawBody = getRawBody(req);
     if (!verifyYookassaSignature(rawBody, signature)) {
@@ -369,7 +334,7 @@ router.get('/subscription', authMiddleware, async (req, res) => {
       subscription_expires_at: user.subscriptionExpiresAt
         ? user.subscriptionExpiresAt.toISOString()
         : null,
-      is_premium: user.isPremium || hasActiveSubscription,
+      is_premium: hasActiveSubscription,
     });
   } catch (err) {
     // eslint-disable-next-line no-console

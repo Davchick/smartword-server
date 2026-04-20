@@ -36,7 +36,7 @@ router.get('/', authMiddleware, async (req, res) => {
     const now = new Date();
     const hasActiveSubscription =
       !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
-    const isPremium = user.isPremium || hasActiveSubscription;
+    const isPremium = hasActiveSubscription;
 
     // Lazy daily reset для aiMessagesUsed
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -122,7 +122,7 @@ router.patch('/', authMiddleware, async (req, res) => {
 
       const hasActiveSubscription =
         !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
-      const isPremium = user.isPremium || hasActiveSubscription;
+      const isPremium = hasActiveSubscription;
 
       // Lazy daily reset
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -181,7 +181,7 @@ router.patch('/', authMiddleware, async (req, res) => {
 
     const hasActiveSubscription =
       !!updated.subscriptionExpiresAt && updated.subscriptionExpiresAt.getTime() > now.getTime();
-    const isPremium = updated.isPremium || hasActiveSubscription;
+    const isPremium = hasActiveSubscription;
 
     let wordsLearnedThisWeek = updated.wordsLearnedThisWeek;
     if (!updated.weekStartDate || updated.weekStartDate < currentMonday) {

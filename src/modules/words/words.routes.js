@@ -258,6 +258,7 @@ router.post('/:id/progress', async (req, res) => {
         where: { id: req.user.id },
         select: {
           isPremium: true,
+          subscriptionExpiresAt: true,
           wordsLearnedThisWeek: true,
           weekStartDate: true,
         },
@@ -280,8 +281,12 @@ router.post('/:id/progress', async (req, res) => {
         weekStartDate = currentMonday;
       }
 
+      const hasActiveSubscription =
+        !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
+      const isPremium = hasActiveSubscription;
+
       // 4. Обновляем weekly counter если слово только что выучено
-      if (justLearned && !user.isPremium && wordsLearnedThisWeek < 50) {
+      if (justLearned && !isPremium && wordsLearnedThisWeek < 50) {
         wordsLearnedThisWeek++;
       }
 
@@ -307,7 +312,7 @@ router.post('/:id/progress', async (req, res) => {
         newCount,
         justLearned,
         wordsLearnedThisWeek,
-        isPremium: user.isPremium,
+        isPremium,
       };
     });
 
@@ -373,10 +378,15 @@ router.post('/progress/batch', async (req, res) => {
         where: { id: req.user.id },
         select: {
           isPremium: true,
+          subscriptionExpiresAt: true,
           wordsLearnedThisWeek: true,
           weekStartDate: true,
         },
       });
+      const hasActiveSubscription =
+        !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
+      const isPremium = hasActiveSubscription;
+
       if (!user) {
         throw Object.assign(new Error('User not found'), { status: 404 });
       }
@@ -425,7 +435,7 @@ router.post('/progress/batch', async (req, res) => {
         }
 
         // Обновляем weekly counter если слово только что выучено
-        if (justLearned && !user.isPremium && wordsLearnedThisWeek < 50) {
+        if (justLearned && !isPremium && wordsLearnedThisWeek < 50) {
           wordsLearnedThisWeek++;
         }
 
@@ -477,7 +487,7 @@ router.post('/progress/batch', async (req, res) => {
       return {
         updated: wordUpdates.length,
         wordsLearnedThisWeek,
-        isPremium: user.isPremium,
+        isPremium,
       };
     });
 

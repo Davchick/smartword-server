@@ -64,6 +64,7 @@ const refreshLimiter = rateLimit({
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: isDev ? 1000 : 100, // 1000 requests in dev, 100 in production
+  skip: (req) => req.path === '/billing/webhook',
   message: {
     error: 'Too many requests',
     code: 'RATE_LIMIT_EXCEEDED',

@@ -176,6 +176,8 @@ router.post('/login', authLimiter, async (req, res) => {
     const refreshToken = signRefreshToken(user.id, jti);
     const accessToken = signAccessToken(user.id);
 
+    const hasActiveSubscription =
+      !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > Date.now();
     res.json({
       access_token: accessToken,
       refresh_token: refreshToken,
@@ -183,7 +185,7 @@ router.post('/login', authLimiter, async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        is_premium: user.isPremium,
+        is_premium: hasActiveSubscription,
         ai_messages_used: user.aiMessagesUsed,
       },
     });
@@ -274,6 +276,8 @@ router.post('/google', async (req, res) => {
     const refreshToken = signRefreshToken(user.id, jti);
     const accessToken = signAccessToken(user.id);
 
+    const hasActiveSubscription =
+      !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > Date.now();
     res.json({
       access_token: accessToken,
       refresh_token: refreshToken,
@@ -281,7 +285,7 @@ router.post('/google', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        is_premium: user.isPremium,
+        is_premium: hasActiveSubscription,
         ai_messages_used: user.aiMessagesUsed,
       },
     });
