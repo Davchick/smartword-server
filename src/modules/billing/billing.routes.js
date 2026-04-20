@@ -23,6 +23,31 @@ function getRawBody(req) {
   return req.rawBody || JSON.stringify(req.body);
 }
 
+async function getUserSubscriptionState(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      subscriptionType: true,
+      subscriptionExpiresAt: true,
+      isPremium: true,
+    },
+  });
+
+  if (!user) return null;
+
+  const now = new Date();
+  const hasActiveSubscription =
+    !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
+
+  return {
+    subscription_type: user.subscriptionType || null,
+    subscription_expires_at: user.subscriptionExpiresAt
+      ? user.subscriptionExpiresAt.toISOString()
+      : null,
+    is_premium: hasActiveSubscription,
+  };
+}
+
 const PLANS = {
   month: {
     amount: 299,
@@ -50,6 +75,7 @@ const YOOKASSA_METHOD_MAP = {
   sberpay: 'sberbank',
   tpay: 'tinkoff_bank',
 };
+const CARD_METHOD = YOOKASSA_METHOD_MAP.card;
 
 function getAuthHeader() {
   if (!env.yookassaShopId || !env.yookassaSecretKey) {
@@ -82,6 +108,7 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
 
     const idempotenceKey = randomUUID();
 
+    const requestedMethodType = YOOKASSA_METHOD_MAP[method] || null;
     const body = {
       amount: {
         value: plan.amount.toFixed(2),
@@ -100,9 +127,8 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
         method,
       },
     };
-    const paymentMethodType = YOOKASSA_METHOD_MAP[method];
-    if (paymentMethodType) {
-      body.payment_method_data = { type: paymentMethodType };
+    if (requestedMethodType) {
+      body.payment_method_data = { type: requestedMethodType };
     }
 
     // 15-секундный таймаут для YooKassa — не держим соединение при медленном ответе
@@ -131,11 +157,58 @@ router.post('/create-payment', paymentLimiter, authMiddleware, async (req, res) 
     }
 
     const confirmationUrl = data?.confirmation?.confirmation_url;
+    const actualMethodType = data?.payment_method?.type || null;
+    const isMethodMismatch =
+      requestedMethodType &&
+      requestedMethodType !== CARD_METHOD &&
+      actualMethodType &&
+      actualMethodType !== requestedMethodType;
+
+    if (isMethodMismatch) {
+      console.warn(
+        '[billing/create-payment] method mismatch',
+        JSON.stringify({
+          userId: req.user.id,
+          method,
+          requestedMethodType,
+          actualMethodType,
+          paymentId: data?.id || null,
+        }),
+      );
+
+      return res.status(409).json({
+        error: 'payment_method_unavailable',
+        message: 'Выбранный способ оплаты временно недоступен. Попробуйте другой способ.',
+        requested_method: method,
+        requested_payment_method_type: requestedMethodType,
+        actual_payment_method_type: actualMethodType,
+      });
+    }
+
+    await prisma.payment.upsert({
+      where: { yookassaPaymentId: data.id },
+      create: {
+        userId: req.user.id,
+        yookassaPaymentId: data.id,
+        planId,
+        amount: plan.amount,
+        status: data.status || 'pending',
+      },
+      update: {
+        userId: req.user.id,
+        planId,
+        amount: plan.amount,
+        status: data.status || 'pending',
+      },
+    });
 
     return res.status(201).json({
       payment_id: data.id,
       status: data.status,
       confirmation_url: confirmationUrl || null,
+      payment_method_type: actualMethodType || requestedMethodType || null,
+      requested_method: method,
+      requested_payment_method_type: requestedMethodType,
     });
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -239,10 +312,10 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
     // 4. Проверка: не обработали ли уже этот платёж (идемпотентность)
     const existingPayment = await prisma.payment.findFirst({
       where: { yookassaPaymentId: paymentId },
-      select: { id: true },
+      select: { id: true, status: true, userId: true, planId: true },
     });
 
-    if (existingPayment) {
+    if (existingPayment?.status === 'succeeded') {
       console.log('[billing/webhook] Payment already processed:', paymentId);
       return res.status(200).json({ ok: true });
     }
@@ -281,10 +354,17 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
         },
       });
 
-      await tx.payment.create({
-        data: {
+      await tx.payment.upsert({
+        where: { yookassaPaymentId: paymentId },
+        create: {
           userId: user.id,
           yookassaPaymentId: paymentId,
+          planId,
+          amount: object.amount?.value ? parseFloat(object.amount.value) : null,
+          status: object.status || 'succeeded',
+        },
+        update: {
+          userId: user.id,
           planId,
           amount: object.amount?.value ? parseFloat(object.amount.value) : null,
           status: object.status || 'succeeded',
@@ -307,35 +387,64 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
 });
 
 /**
+ * GET /billing/payment-status/:paymentId
+ * Возвращает статус конкретного платежа текущего пользователя.
+ */
+router.get('/payment-status/:paymentId', authMiddleware, async (req, res) => {
+  try {
+    const paymentId = String(req.params?.paymentId || '').trim();
+    if (!paymentId) {
+      return res.status(400).json({ error: 'invalid_payment_id' });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: {
+        yookassaPaymentId: paymentId,
+        userId: req.user.id,
+      },
+      select: {
+        yookassaPaymentId: true,
+        status: true,
+        planId: true,
+        amount: true,
+        createdAt: true,
+      },
+    });
+
+    if (!payment) {
+      return res.status(404).json({ error: 'payment_not_found' });
+    }
+
+    const subscription = await getUserSubscriptionState(req.user.id);
+    if (!subscription) {
+      return res.status(404).json({ error: 'user_not_found' });
+    }
+
+    return res.json({
+      payment_id: payment.yookassaPaymentId,
+      status: payment.status || 'pending',
+      plan_id: payment.planId,
+      amount: payment.amount ?? null,
+      created_at: payment.createdAt.toISOString(),
+      ...subscription,
+    });
+  } catch (err) {
+    console.error('[billing/payment-status]', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
  * GET /billing/subscription
  * Возвращает тип и дату окончания подписки текущего пользователя.
  */
 router.get('/subscription', authMiddleware, async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: {
-        subscriptionType: true,
-        subscriptionExpiresAt: true,
-        isPremium: true,
-      },
-    });
-
-    if (!user) {
+    const subscription = await getUserSubscriptionState(req.user.id);
+    if (!subscription) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    const now = new Date();
-    const hasActiveSubscription =
-      !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > now.getTime();
-
-    res.json({
-      subscription_type: user.subscriptionType || null,
-      subscription_expires_at: user.subscriptionExpiresAt
-        ? user.subscriptionExpiresAt.toISOString()
-        : null,
-      is_premium: hasActiveSubscription,
-    });
+    res.json(subscription);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[billing/subscription]', err);
