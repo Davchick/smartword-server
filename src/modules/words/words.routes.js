@@ -400,7 +400,10 @@ router.post('/progress/batch', async (req, res) => {
 
       const wordMap = new Map();
       for (const w of words) {
-        wordMap.set(w.id, w);
+        wordMap.set(w.id, {
+          correctCount: w.correctCount,
+          learned: w.correctCount >= 5,
+        });
       }
 
       // 3. Сброс недели если нужно
@@ -413,25 +416,23 @@ router.post('/progress/batch', async (req, res) => {
       }
 
       // 4. Формируем все update операции для слов
-      const wordUpdates = [];
-      const justLearnedWordIds = [];
+      const wordUpdates = new Map();
 
       for (const update of updates) {
-        const word = wordMap.get(update.wordId);
-        if (!word) continue; // Пропускаем несуществующие слова (не ошибка)
+        const wordState = wordMap.get(update.wordId);
+        if (!wordState) continue; // Пропускаем несуществующие слова (не ошибка)
 
         const delta = update.knew
           ? Number(update.correctDelta ?? 1)
           : Number(update.incorrectDelta ?? -1);
 
-        const wasLearnedBefore = word.correctCount >= 5;
-        const newCount = Math.max(0, word.correctCount + delta);
+        const wasLearnedBefore = wordState.learned;
+        const newCount = Math.max(0, wordState.correctCount + delta);
         const isNowLearned = newCount >= 5;
         const justLearned = !wasLearnedBefore && isNowLearned;
 
         if (justLearned) {
           totalJustLearned++;
-          justLearnedWordIds.push(update.wordId);
         }
 
         // Обновляем weekly counter если слово только что выучено
@@ -439,16 +440,24 @@ router.post('/progress/batch', async (req, res) => {
           wordsLearnedThisWeek++;
         }
 
-        wordUpdates.push({
-          where: { id: update.wordId },
-          data: { correctCount: newCount, lastReviewed: now },
+        // Если одно и то же слово встречается в батче несколько раз,
+        // сохраняем только финальное состояние и применяем его один раз.
+        wordUpdates.set(update.wordId, newCount);
+        wordMap.set(update.wordId, {
+          correctCount: newCount,
+          learned: isNowLearned,
         });
       }
 
       // 5. Выполняем все обновления слов параллельно (Prisma batch)
-      if (wordUpdates.length > 0) {
+      if (wordUpdates.size > 0) {
         await Promise.all(
-          wordUpdates.map(wu => tx.word.update(wu))
+          Array.from(wordUpdates.entries()).map(([wordId, correctCount]) =>
+            tx.word.update({
+              where: { id: wordId },
+              data: { correctCount, lastReviewed: now },
+            })
+          )
         );
       }
 
@@ -485,7 +494,7 @@ router.post('/progress/batch', async (req, res) => {
       });
 
       return {
-        updated: wordUpdates.length,
+        updated: wordUpdates.size,
         wordsLearnedThisWeek,
         isPremium,
       };
