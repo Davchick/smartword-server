@@ -76,7 +76,6 @@ const YOOKASSA_METHOD_MAP = {
   tpay: 'tinkoff_bank',
 };
 const CARD_METHOD = YOOKASSA_METHOD_MAP.card;
-const SHOULD_FORCE_NON_CARD_METHOD = env.yookassaForceNonCardMethod;
 
 function getAuthHeader() {
   if (!env.yookassaShopId || !env.yookassaSecretKey) {
@@ -89,9 +88,7 @@ function getAuthHeader() {
 }
 
 function shouldAttachPaymentMethodData(requestedMethodType) {
-  if (!requestedMethodType) return false;
-  if (requestedMethodType === CARD_METHOD) return true;
-  return SHOULD_FORCE_NON_CARD_METHOD;
+  return !!requestedMethodType;
 }
 
 function getYooKassaErrorMessage(errorBody) {
