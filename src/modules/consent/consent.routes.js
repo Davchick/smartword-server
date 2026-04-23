@@ -45,11 +45,7 @@ router.post('/registration', async (req, res) => {
   }
 });
 
-/**
- * POST /consent/ai-chat
- * Зафиксировать согласие на использование AI-чата
- * Требуется отдельное согласие для трансграничной передачи
- */
+
 router.post('/ai-chat', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
