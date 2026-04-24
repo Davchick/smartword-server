@@ -24,6 +24,9 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```env
 JWT_SECRET=ваш_секрет_минимум_32_символа
 JWT_REFRESH_SECRET=ваш_секрет_минимум_32_символа
+OLLAMA_API_KEYS=ollama_key_1,ollama_key_2
+OLLAMA_MODEL=gemini-3-flash-preview:cloud
+OPENROUTER_API_KEYS=openrouter_key_1,openrouter_key_2
 ```
 
 ### 4. Настройка базы данных

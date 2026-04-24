@@ -113,6 +113,12 @@ const env = {
   // OpenRouter API ключи (через запятую для fallback, минимум 1)
   // Каждый ключ с $10+ даёт 1,000 бесплатных запросов/день
   openrouterApiKeys: process.env.OPENROUTER_API_KEYS || '',
+  // Ollama Cloud API ключи (через запятую, основной провайдер)
+  ollamaApiKeys: process.env.OLLAMA_API_KEYS || '',
+  // Модель Ollama Cloud по умолчанию
+  ollamaModel: process.env.OLLAMA_MODEL || 'gemini-3-flash-preview:cloud',
+  // Базовый URL Ollama Cloud API
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'https://ollama.com',
   // Публичный URL приложения/бэкенда для ссылок в письмах
   appPublicUrl: process.env.APP_PUBLIC_URL || process.env.BASE_URL || (isProduction ? 'https://api.smartword.app' : 'http://localhost:3000'),
   // SMTP (для разработки можно использовать Ethereal или Mailtrap)
