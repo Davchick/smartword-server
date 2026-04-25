@@ -8,8 +8,21 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const { requestLogger } = require('./middleware/requestLogger');
 
 const app = express();
-
 const isProduction = process.env.NODE_ENV === 'production';
+
+function parseOrigins(value) {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+const defaultAdminOrigins = isProduction
+  ? []
+  : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const configuredAdminOrigins = parseOrigins(env.adminCorsOrigins);
+const adminCorsOrigins = configuredAdminOrigins.length > 0 ? configuredAdminOrigins : defaultAdminOrigins;
 
 if (isProduction) {
   app.set('trust proxy', 1);
@@ -18,8 +31,6 @@ if (isProduction) {
 // Security first: Apply security headers to ALL routes
 app.use(securityHeaders);
 
-// CORS для мобильного приложения — разрешаем все запросы
-// (у мобильного приложения нет origin, CORS не проверяется)
 app.use(cors());
 
 app.use(express.json({
@@ -56,6 +67,7 @@ const chatRouter = require('./modules/chat/chat.routes');
 const billingRouter = require('./modules/billing/billing.routes');
 const streaksRouter = require('./modules/streaks/streaks.routes');
 const consentRouter = require('./modules/consent/consent.routes');
+const adminRouter = require('./modules/admin/admin.routes');
 
 app.use('/auth', authRouter);
 app.use('/profile', profileRouter);
@@ -66,6 +78,22 @@ app.use('/chat', chatRouter);
 app.use('/billing', billingRouter);
 app.use('/streaks', streaksRouter);
 app.use('/consent', consentRouter);
+app.use('/admin', cors({
+  origin: (origin, callback) => {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (adminCorsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('CORS blocked for admin origin'));
+  },
+  methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-admin-token', 'x-admin-email'],
+}));
+app.use('/admin', adminRouter);
 
 // 404 handler for unknown routes
 app.use(notFoundHandler);

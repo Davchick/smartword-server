@@ -151,3 +151,21 @@ model Payment {
   @@index([createdAt])
 }
 
+model AdminAuditLog {
+  id          String   @id @default(uuid())
+  adminEmail  String?
+  adminUserId String?
+  action      String
+  targetType  String
+  targetId    String?
+  ipAddress   String?
+  userAgent   String?
+  outcome     String   @default("success")
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([adminEmail, createdAt])
+}
+

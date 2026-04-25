@@ -139,6 +139,9 @@ const env = {
   // Telegram Support Bot
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramAdminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || '',
+  adminApiToken: process.env.ADMIN_API_TOKEN || '',
+  adminEmails: process.env.ADMIN_EMAILS || '',
+  adminCorsOrigins: process.env.ADMIN_CORS_ORIGINS || '',
 
   // Environment info
   isDevelopment: isDev,
