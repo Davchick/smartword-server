@@ -334,7 +334,27 @@ router.post('/refresh', refreshLimiter, async (req, res) => {
     
     // Device fingerprint validation (security monitoring)
     const currentFingerprint = req.deviceFingerprint;
-    if (record.deviceFingerprint && currentFingerprint && record.deviceFingerprint !== currentFingerprint) {
+    if (!currentFingerprint) {
+      return res.status(401).json({
+        error: 'Device fingerprint is required',
+        code: 'FINGERPRINT_REQUIRED',
+      });
+    }
+
+    if (!record.deviceFingerprint) {
+      // Legacy tokens without device binding are revoked to prevent replay from cloned clients.
+      await prisma.refreshToken.update({
+        where: { id: record.id },
+        data: { revokedAt: new Date(), lastUsedAt: new Date() },
+      });
+
+      return res.status(401).json({
+        error: 'Legacy refresh token is not trusted anymore. Please log in again.',
+        code: 'REAUTH_REQUIRED',
+      });
+    }
+
+    if (record.deviceFingerprint !== currentFingerprint) {
       // Different device using the same refresh token - potential token theft
       console.warn('[SECURITY] Refresh token used from different device:', {
         userId,
@@ -345,7 +365,7 @@ router.post('/refresh', refreshLimiter, async (req, res) => {
       // Revoke the token for security
       await prisma.refreshToken.update({
         where: { id: record.id },
-        data: { revokedAt: new Date() },
+        data: { revokedAt: new Date(), lastUsedAt: new Date() },
       });
       
       return res.status(401).json({ 

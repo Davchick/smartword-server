@@ -35,6 +35,8 @@ model User {
   trainingProgress    TrainingProgress[]
   userStreak          UserStreak?
   payments            Payment[]
+  supportTickets      SupportTicket[]
+  errorLogs           UserErrorLog[]
 }
 
 model PasswordResetToken {
@@ -167,5 +169,43 @@ model AdminAuditLog {
   @@index([createdAt])
   @@index([action, createdAt])
   @@index([adminEmail, createdAt])
+}
+
+model SupportTicket {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email       String
+  subject     String
+  message     String
+  status      String   @default("open")
+  priority    String   @default("normal")
+  assignedTo  String?
+  adminNotes  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  resolvedAt  DateTime?
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@index([priority, createdAt])
+}
+
+model UserErrorLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  errorType   String
+  message     String
+  stack       String?
+  url         String?
+  userAgent   String?
+  metadata    Json?
+  resolved    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([errorType, createdAt])
+  @@index([resolved, createdAt])
 }
 

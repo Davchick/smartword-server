@@ -6,6 +6,7 @@ const { etagMiddleware } = require('./middleware/etag');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const { requestLogger } = require('./middleware/requestLogger');
+const { deviceFingerprintMiddleware } = require('./middleware/deviceFingerprint');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -31,7 +32,13 @@ if (isProduction) {
 // Security first: Apply security headers to ALL routes
 app.use(securityHeaders);
 
-app.use(cors());
+app.use(cors((req, callback) => {
+  if (req.path.startsWith('/admin')) {
+    callback(null, { origin: false });
+    return;
+  }
+  callback(null, { origin: true });
+}));
 
 app.use(express.json({
   limit: '10mb',
@@ -67,6 +74,7 @@ const chatRouter = require('./modules/chat/chat.routes');
 const billingRouter = require('./modules/billing/billing.routes');
 const streaksRouter = require('./modules/streaks/streaks.routes');
 const consentRouter = require('./modules/consent/consent.routes');
+const supportRouter = require('./modules/support/support.routes');
 const adminRouter = require('./modules/admin/admin.routes');
 
 app.use('/auth', authRouter);
@@ -78,6 +86,7 @@ app.use('/chat', chatRouter);
 app.use('/billing', billingRouter);
 app.use('/streaks', streaksRouter);
 app.use('/consent', consentRouter);
+app.use('/support', supportRouter);
 app.use('/admin', cors({
   origin: (origin, callback) => {
     if (!origin) {
@@ -93,6 +102,8 @@ app.use('/admin', cors({
   methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-admin-token', 'x-admin-email'],
 }));
+
+app.use(deviceFingerprintMiddleware);
 app.use('/admin', adminRouter);
 
 // 404 handler for unknown routes

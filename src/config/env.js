@@ -141,7 +141,9 @@ const env = {
   telegramAdminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || '',
   adminApiToken: process.env.ADMIN_API_TOKEN || '',
   adminEmails: process.env.ADMIN_EMAILS || '',
+  adminIdentities: process.env.ADMIN_IDENTITIES || '',
   adminCorsOrigins: process.env.ADMIN_CORS_ORIGINS || '',
+  supportErrorLogToken: process.env.SUPPORT_ERROR_LOG_TOKEN || '',
 
   // Environment info
   isDevelopment: isDev,

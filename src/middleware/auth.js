@@ -1,17 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { env } = require('../config/env');
 const { prisma } = require('../db/prisma');
-const crypto = require('crypto');
-
-/**
- * Generate a device fingerprint from request headers
- */
-function generateDeviceFingerprint(req) {
-  const userAgent = req.headers['user-agent'] || '';
-  const acceptLanguage = req.headers['accept-language'] || '';
-  const fingerprint = `${userAgent}-${acceptLanguage}`;
-  return crypto.createHash('sha256').update(fingerprint).digest('hex');
-}
+const { generateDeviceFingerprint } = require('./deviceFingerprint');
 
 /**
  * Простой LRU кэш для аутентифицированных пользователей.
@@ -107,7 +97,7 @@ async function authMiddleware(req, res, next) {
     }
 
     // Store device fingerprint for security monitoring
-    req.deviceFingerprint = generateDeviceFingerprint(req);
+    req.deviceFingerprint = req.deviceFingerprint || generateDeviceFingerprint(req);
 
     req.user = user;
     next();
