@@ -103,11 +103,6 @@ SMTP_USER=noreply@smartword.app
 SMTP_PASS=your_password
 ```
 
-#### Google OAuth
-```env
-GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
-```
-
 #### YooKassa
 ```env
 YOOKASSA_SHOP_ID=your_shop_id
@@ -162,7 +157,6 @@ DATABASE_URL is required
 - [ ] JWT секреты сгенерированы (32+ символа)
 - [ ] HTTPS настроен для API
 - [ ] SMTP настроен для email
-- [ ] Google OAuth настроен
 - [ ] YooKassa настроен
 - [ ] `.env` не содержит dev значений
 - [ ] Брандмауэр настроен (порт 3000)
@@ -197,4 +191,7 @@ DATABASE_URL is required
 - Убедитесь, что порты не заняты
 
 ### Email в development
-Без SMTP email будут логироваться в консоль (test mode).
+Без SMTP письма отправляются через тестовый Ethereal (ссылка на письмо выводится в логи).
+
+### Email в production
+Без SMTP сервер не отправляет письма и вернёт ошибку `Email service is temporarily unavailable`.

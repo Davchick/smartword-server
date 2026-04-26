@@ -13,8 +13,6 @@ model User {
   emailVerified  Boolean        @default(false)
   emailVerifyToken         String?   @unique
   emailVerifyTokenExpiresAt DateTime?
-  googleId       String?        @unique
-  googleEmail    String?
   isPremium            Boolean   @default(false)
   aiMessagesUsed       Int       @default(0)
   lastAiMessageResetAt DateTime  @default(now())

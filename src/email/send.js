@@ -11,8 +11,11 @@ async function sendMail({ to, subject, html }) {
   let transport = getTransporter();
   if (!transport) transport = await getTransporterOrTest();
   if (!transport) {
-    console.warn('[email] SMTP not configured. Skipping send.');
-    return { skipped: true };
+    const message = env.isProduction
+      ? 'SMTP is not configured in production'
+      : 'SMTP is not configured';
+    console.warn(`[email] ${message}.`);
+    return { error: message };
   }
   
   console.log(`[email] Sending email to ${to} with subject: ${subject}`);

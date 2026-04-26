@@ -82,10 +82,6 @@ function validateSecurityConfig() {
     console.warn('[CONFIG] SMTP not configured - email features will use test mode');
   }
 
-  if (!process.env.GOOGLE_CLIENT_ID) {
-    console.warn('[CONFIG] Google OAuth not configured - Google Sign-In will be disabled');
-  }
-
   // Log environment info
   console.log(`[CONFIG] Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`[CONFIG] Config file: ${envFile}`);
@@ -128,8 +124,6 @@ const env = {
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
   mailFrom: process.env.MAIL_FROM || process.env.SMTP_USER || 'noreply@smartword.app',
-  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
-
   // ЮKassa (подписка)
   yookassaShopId: process.env.YOOKASSA_SHOP_ID || '',
   yookassaSecretKey: process.env.YOOKASSA_SECRET_KEY || '',

@@ -9,7 +9,6 @@ SECRET_PATTERNS=(
   'JWT_REFRESH_SECRET=[a-f0-9]\{64\}'
   'OPENROUTER_API_KEYS=sk-or-v1-[a-f0-9]'
   'SMTP_PASS=.+'
-  'GOOGLE_CLIENT_ID=[0-9].*\.apps\.googleusercontent\.com'
   'YOOKASSA_SECRET_KEY=test_[a-zA-Z0-9]'
   'TELEGRAM_BOT_TOKEN=[0-9]*:[a-zA-Z0-9_-]'
 )

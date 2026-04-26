@@ -2,7 +2,6 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { OAuth2Client } = require('google-auth-library');
 const { prisma } = require('../../db/prisma');
 const { env } = require('../../config/env');
 const { authMiddleware } = require('../../middleware/auth');
@@ -191,106 +190,6 @@ router.post('/login', authLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error('[auth/login]', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-/**
- * POST /auth/google
- * Body: { id_token: string }
- * Валидирует Google ID Token, создаёт или находит пользователя, выдаёт JWT.
- * Auto-link: если есть пользователь с таким email без googleId — привязывает googleId.
- */
-router.post('/google', async (req, res) => {
-  try {
-    const { id_token: idToken } = req.body;
-    if (!idToken || typeof idToken !== 'string') {
-      return res.status(400).json({ error: 'id_token is required' });
-    }
-    if (!env.googleClientId) {
-      return res.status(503).json({ error: 'Google sign-in is not configured' });
-    }
-
-    const client = new OAuth2Client(env.googleClientId);
-    let ticket;
-    try {
-      ticket = await client.verifyIdToken({
-        idToken,
-        audience: env.googleClientId,
-      });
-    } catch (verifyErr) {
-      console.error('[auth/google] verifyIdToken failed:', verifyErr.message);
-      return res.status(401).json({ error: 'Invalid Google token' });
-    }
-
-    const payload = ticket.getPayload();
-    const googleId = payload.sub;
-    const email = payload.email?.trim().toLowerCase();
-    const emailVerified = payload.email_verified === true;
-
-    if (!email || !googleId) {
-      return res.status(400).json({ error: 'Google token missing email or sub' });
-    }
-    if (!emailVerified) {
-      return res.status(403).json({ error: 'Google email not verified' });
-    }
-
-    let user = await prisma.user.findUnique({ where: { googleId } });
-    if (user) {
-      // Уже есть пользователь с этим Google ID
-    } else {
-      const existingByEmail = await prisma.user.findUnique({ where: { email } });
-      if (existingByEmail) {
-        await prisma.user.update({
-          where: { id: existingByEmail.id },
-          data: {
-            googleId,
-            googleEmail: email,
-            emailVerified: true,
-          },
-        });
-        user = await prisma.user.findUnique({ where: { id: existingByEmail.id } });
-      } else {
-        const placeholderHash = await hashPassword(crypto.randomBytes(32).toString('hex'));
-        user = await prisma.user.create({
-          data: {
-            email,
-            passwordHash: placeholderHash,
-            emailVerified: true,
-            googleId,
-            googleEmail: email,
-          },
-        });
-      }
-    }
-
-    const jti = crypto.randomBytes(16).toString('hex');
-    const deviceFingerprint = req.deviceFingerprint || null;
-    await prisma.refreshToken.create({
-      data: { 
-        userId: user.id, 
-        token: jti,
-        deviceFingerprint,
-      },
-    });
-    const refreshToken = signRefreshToken(user.id, jti);
-    const accessToken = signAccessToken(user.id);
-
-    const hasActiveSubscription =
-      !!user.subscriptionExpiresAt && user.subscriptionExpiresAt.getTime() > Date.now();
-    res.json({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      expires_in: 3600,
-      user: {
-        id: user.id,
-        email: user.email,
-        is_premium: hasActiveSubscription,
-        ai_messages_used: user.aiMessagesUsed,
-      },
-    });
-  } catch (err) {
-    console.error('[auth/google]', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -565,7 +464,10 @@ router.post('/resend-verification', strictLimiter, async (req, res) => {
       where: { id: user.id },
       data: { emailVerifyToken, emailVerifyTokenExpiresAt },
     });
-    await sendVerificationEmail(normalizedEmail, emailVerifyToken);
+    const emailResult = await sendVerificationEmail(normalizedEmail, emailVerifyToken);
+    if (emailResult?.error) {
+      return res.status(503).json({ error: 'Email service is temporarily unavailable' });
+    }
     res.json({ message: 'Письмо с ссылкой отправлено повторно.' });
   } catch (err) {
     console.error('[auth/resend-verification]', err);
@@ -592,7 +494,11 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
       await prisma.passwordResetToken.create({
         data: { userId: user.id, token, expiresAt },
       });
-      await sendPasswordResetEmail(normalizedEmail, token);
+      const emailResult = await sendPasswordResetEmail(normalizedEmail, token);
+      if (emailResult?.error) {
+        console.error('[auth/forgot-password] Email send failed:', emailResult.error);
+        return res.status(503).json({ error: 'Email service is temporarily unavailable' });
+      }
     }
     res.json({ message: 'Если такой email зарегистрирован, на него отправлена ссылка для сброса пароля.' });
   } catch (err) {

@@ -22,6 +22,9 @@ function getTransporter() {
 async function getTransporterOrTest() {
   const real = getTransporter();
   if (real) return real;
+  if (env.isProduction) {
+    return null;
+  }
   if (cachedTestTransporter) return cachedTestTransporter.transport;
   const testAccount = await nodemailer.createTestAccount();
   cachedTestTransporter = {
